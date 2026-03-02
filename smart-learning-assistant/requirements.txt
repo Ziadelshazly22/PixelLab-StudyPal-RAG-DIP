@@ -3,6 +3,7 @@ langchain-google-genai
 langchain-community
 langchain-chroma
 langserve[all]
+httpx>=0.23.0,<0.28.0     # langserve 0.2.x requires VerifyTypes removed in httpx 0.28
 fastapi
 uvicorn[standard]
 gradio
@@ -22,3 +23,4 @@ python-dotenv
 ragas
 rouge-score
 pytest
+Nougat
