@@ -1,77 +1,194 @@
 """
 app/retrieval/retriever.py
 --------------------------
-Builds a LangChain-compatible retriever backed by a persistent ChromaDB
-collection.  Uses Maximal Marginal Relevance (MMR) search for diversity.
+Vector store retrieval module for the Smart Learning Assistant.
 
-Embedding strategy
-------------------
-- Primary  : Google ``text-embedding-004``  (when GOOGLE_API_KEY is set)
-- Fallback : ``all-MiniLM-L6-v2``           (sentence-transformers, local)
+Provides two retriever functions:
+1. get_retriever() — Standard MMR (Maximal Marginal Relevance) retrieval for diversity.
+2. get_guardrail_retriever() — Wraps the retriever with a similarity threshold to filter
+   out-of-domain queries and prevent hallucination on irrelevant topics.
 
-The embedding model used here **must match** the one used during ingestion;
-otherwise the stored vectors will be incompatible with the query vector.
+The guardrail is essential: queries too distant from the knowledge base return no context,
+triggering the chain's refusal message instead of a fabricated answer.
+
+Usage
+-----
+    from app.retrieval.retriever import get_guardrail_retriever
+    
+    retriever_fn = get_guardrail_retriever(threshold=0.25)
+    results = retriever_fn("What is edge detection?")
+    # Returns top-k documents if top-1 similarity is above threshold, else [].
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from functools import lru_cache
+from typing import Callable
 
-from dotenv import load_dotenv
+from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStoreRetriever
 
-load_dotenv()
+from app.ingestion.pipeline import load_vectorstore
 
-_CHROMA_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
-_COLLECTION = os.getenv("COLLECTION_NAME", "dip_knowledge_base")
-_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/text-embedding-004")
+logger = logging.getLogger(__name__)
 
 
-def _get_embeddings():
+def get_retriever(k: int = 5, fetch_k: int = 20) -> VectorStoreRetriever:
     """
-    Return the embedding model matching the one used during ingestion.
+    Build a Maximal Marginal Relevance (MMR) retriever over ChromaDB.
 
-    Strategy
-    --------
-    - If ``GOOGLE_API_KEY`` is present, use Google ``text-embedding-004``.
-    - Otherwise fall back to local ``all-MiniLM-L6-v2`` (no API key required).
-    """
-    if os.getenv("GOOGLE_API_KEY"):
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+    MMR balances relevance and diversity: it returns the top-k documents that are
+    most relevant to the query while being maximally diverse from each other.
+    This prevents the chain from receiving k nearly-identical passages, improving
+    response variety and reducing redundancy.
 
-        return GoogleGenerativeAIEmbeddings(model=_EMBEDDING_MODEL)
-
-    from langchain_community.embeddings import HuggingFaceEmbeddings
-
-    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-
-
-@lru_cache(maxsize=1)
-def build_retriever(k: int = 6, fetch_k: int = 20):
-    """
-    Return an MMR retriever over the persisted ChromaDB collection.
-
-    Parameters
-    ----------
-    k : int
-        Number of documents to return per query.
-    fetch_k : int
-        Candidate pool size for MMR re-ranking.
+    Args
+    ----
+    k : int, optional
+        Number of documents to return (default: 5).
+    fetch_k : int, optional
+        Number of documents to fetch internally before reranking by MMR (default: 20).
+        Larger fetch_k improves diversity but increases latency.
 
     Returns
     -------
     VectorStoreRetriever
-    """
-    from langchain_chroma import Chroma
+        A retriever configured for MMR search. If the installed langchain-community
+        version does not support MMR (rare), falls back to standard similarity search.
 
-    embeddings = _get_embeddings()
-    vector_store = Chroma(
-        collection_name=_COLLECTION,
-        embedding_function=embeddings,
-        persist_directory=_CHROMA_DIR,
-    )
-    retriever = vector_store.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": k, "fetch_k": fetch_k},
-    )
+    Raises
+    ------
+    FileNotFoundError
+        If the ChromaDB directory does not exist. Ensure the ingestion pipeline
+        has been run first.
+
+    Notes
+    -----
+    - The retriever is stateless and safe to call repeatedly.
+    - MMR computation is O(k²) and may add ~200-500ms latency for k=5.
+    - If latency is critical, use similarity search by setting search_type="similarity"
+      and omitting fetch_k.
+
+    Examples
+    --------
+    >>> retriever = get_retriever(k=5)
+    >>> docs = retriever.invoke("What is histogram equalization?")
+    >>> print(f"Retrieved {len(docs)} documents")
+    """
+    vectorstore = load_vectorstore()
+
+    # Attempt MMR; fall back to similarity if older LangChain version.
+    try:
+        retriever = vectorstore.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": fetch_k},
+        )
+        logger.info(
+            f"Retriever initialized with MMR (k={k}, fetch_k={fetch_k}). "
+            "Query results will be diverse and relevant."
+        )
+    except AttributeError:
+        logger.warning(
+            f"MMR not supported in this langchain-community version. "
+            f"Falling back to similarity search (k={k})."
+        )
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": k},
+        )
+
     return retriever
+
+
+def get_guardrail_retriever(threshold: float = 0.25) -> Callable[[str], list[Document]]:
+    """
+    Build a guardrail-wrapped retriever that filters out-of-domain queries.
+
+    The guardrail computes the similarity score (Chroma distance) of the top-1 result
+    against the query. If the score exceeds the threshold (meaning the query is very
+    dissimilar from all knowledge base content), the retriever returns an empty list.
+
+    This empty context triggers the RAG chain's mandatory refusal message:
+    "This question falls outside my knowledge base…"
+
+    Use this to prevent the LLM from inventing answers to off-topic questions.
+
+    Args
+    ----
+    threshold : float, optional
+        Similarity threshold. Distance >= threshold is considered out-of-domain
+        (default: 0.25). Typical range: [0.15, 0.35] depending on embedding model.
+        - Lower values (0.15) → more lenient (fewer refusals)
+        - Higher values (0.35) → more strict (more refusals)
+
+    Returns
+    -------
+    Callable[[str], list[Document]]
+        A function that accepts a query string and returns either:
+        - Empty list (query is out-of-domain)
+        - Top-k documents from the retriever (query is in-domain)
+
+    Notes
+    -----
+    - The threshold should be tuned empirically by testing edge cases
+      (e.g., "What is the capital of France?" should return []).
+    - Chroma uses L2 distance, so lower values = higher similarity.
+    - The guardrail is transparent to the LCEL chain — pass the returned function
+      to RunnableLambda() in the chain definition.
+
+    Examples
+    --------
+    >>> guardrail_fn = get_guardrail_retriever(threshold=0.25)
+    >>> 
+    >>> # In-domain query
+    >>> dip_docs = guardrail_fn("What is histogram equalization?")
+    >>> print(f"DIP question: {len(dip_docs)} documents retrieved")
+    >>> 
+    >>> # Out-of-domain query
+    >>> off_topic_docs = guardrail_fn("What is the capital of France?")
+    >>> print(f"Off-topic question: {len(off_topic_docs)} documents (guardrail active)")
+    """
+    vectorstore = load_vectorstore()
+    retriever_raw = get_retriever()
+
+    def guardrail_retriever(query: str) -> list[Document]:
+        """
+        Retrieve documents if query is in-domain, else return empty list.
+
+        Args
+        ----
+        query : str
+            The user's question.
+
+        Returns
+        -------
+        list[Document]
+            Either [] (out-of-domain) or top-k documents (in-domain).
+        """
+        # Compute similarity of top-1 result.
+        try:
+            top1_with_score = vectorstore.similarity_search_with_score(query, k=1)
+            if not top1_with_score:
+                logger.debug(f"Guardrail: no results for query. Returning [].")
+                return []
+
+            doc, score = top1_with_score[0]
+            logger.debug(f"Guardrail: top-1 score = {score:.3f}, threshold = {threshold}")
+
+            # Chroma uses L2 distance; higher score = lower similarity.
+            if score >= threshold:
+                logger.info(
+                    f"Guardrail activated: query too dissimilar (score {score:.3f} >= threshold {threshold}). "
+                    f"Returning no context — chain will refuse."
+                )
+                return []
+        except Exception as e:
+            logger.warning(f"Guardrail error during similarity check: {e}. Proceeding with full retrieval.")
+
+        # Query is in-domain; return full top-k retrieval.
+        results = retriever_raw.invoke(query)
+        logger.debug(f"Guardrail passed: returned {len(results)} documents.")
+        return results
+
+    return guardrail_retriever

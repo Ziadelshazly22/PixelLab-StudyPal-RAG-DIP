@@ -18,14 +18,40 @@ Run:
 
 from __future__ import annotations
 
+import logging
+import os
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
 
 load_dotenv()  # must run before any LangChain/Google imports
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langserve import add_routes
 
 from app.api.router import router as api_router
+from app.chains.rag_chain import build_rag_chain
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Lifespan — log LLM backend on startup
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan handler — runs on server startup and shutdown.
+
+    Startup: Log which LLM backend is active (Gemini or Ollama).
+    Shutdown: (reserved for cleanup if needed)
+    """
+    llm_backend = os.getenv("LLM_BACKEND", "gemini")
+    logger.info(f"🚀 Server ready. LLM backend: {llm_backend.upper()}")
+    yield
+    logger.info("Server shutting down.")
+
 
 # ---------------------------------------------------------------------------
 # App factory
@@ -41,11 +67,13 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
 # CORS – allow all origins during development; tighten in production
 # ---------------------------------------------------------------------------
+# TODO: restrict origins before production deployment
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,6 +86,11 @@ app.add_middleware(
 # Auxiliary REST routes
 # ---------------------------------------------------------------------------
 app.include_router(api_router)
+
+# ---------------------------------------------------------------------------
+# LangServe RAG chain route
+# ---------------------------------------------------------------------------
+add_routes(app, build_rag_chain(), path="/chain/rag")
 
 
 # ---------------------------------------------------------------------------
