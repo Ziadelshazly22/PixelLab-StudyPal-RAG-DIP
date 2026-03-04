@@ -1,72 +1,271 @@
+# -*- coding: utf-8 -*-
 """
 app/summarization/summarizer.py
 --------------------------------
-Builds a map-reduce chapter summarisation chain using LangChain.
+Chapter summarisation and study-question generation for the DIP AI Tutor.
 
-The chain:
-  1. MAP    – summarise each chunk individually (Gemini 2.0 Flash)
-  2. REDUCE – combine chunk summaries into a coherent chapter summary
+Functions
+---------
+get_source_chunks(source_filename)
+    Retrieve all ChromaDB chunks belonging to one source PDF, sorted by page.
+
+summarize_document(source_filename)
+    Map-reduce summarisation over all chunks of a document.
+    Resilient to Gemini 429 rate limits via tenacity retry.
+
+generate_study_questions(source_filename, n)
+    Generate *n* exam-style questions from a representative sample of the document.
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from functools import lru_cache
+import re
 
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()
 
-_MAP_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a concise academic summariser. "
-            "Summarise the following DIP textbook excerpt in 3-5 bullet points, "
-            "preserving key equations, definitions, and algorithm names:\n\n{text}",
-        ),
-    ]
-)
+logger = logging.getLogger(__name__)
 
-_REDUCE_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are an expert in Digital Image Processing. "
-            "Combine the following partial summaries into a single, coherent "
-            "chapter summary (≤400 words). Highlight the most important concepts "
-            "and any mathematical foundations:\n\n{summaries}",
-        ),
-    ]
-)
+# ---------------------------------------------------------------------------
+# Prompt templates for map-reduce summarisation
+# ---------------------------------------------------------------------------
+
+_MAP_TEMPLATE = """\
+You are summarising a section of a Digital Image Processing textbook.
+Preserve: key concepts, algorithm names, mathematical formulas (LaTeX notation),
+and any cited theorems. Be concise but technically precise.
+
+SECTION TEXT:
+{text}
+
+CONCISE TECHNICAL SUMMARY:"""
+
+_COMBINE_TEMPLATE = """\
+You are a DIP expert creating a comprehensive study-guide chapter summary
+from individual section summaries. Organise your output under these exact headings:
+
+### 1. Core Concepts
+### 2. Key Algorithms & Formulas
+### 3. Practical Applications
+### 4. Common Exam Topics
+
+Maintain all LaTeX notation. Be thorough but avoid repetition.
+
+SECTION SUMMARIES:
+{text}
+
+COMPREHENSIVE CHAPTER SUMMARY:"""
 
 
-@lru_cache(maxsize=1)
-def build_summarization_chain():
+# ---------------------------------------------------------------------------
+# Helper: retrieve all chunks for one source file
+# ---------------------------------------------------------------------------
+
+def get_source_chunks(source_filename: str) -> list[Document]:
+    """Retrieve all ChromaDB chunks that belong to *source_filename*, sorted by page.
+
+    Uses a metadata ``where`` filter so only chunks from the requested file are
+    returned — no similarity scoring is applied.
+
+    Args:
+        source_filename: Exact filename stored in chunk metadata (e.g.
+            ``"Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf"``).
+
+    Returns:
+        List of :class:`~langchain_core.documents.Document` objects sorted
+        ascending by ``metadata["page"]``.
+
+    Raises:
+        ValueError: If *source_filename* matches no chunks in the store.
+
+    Example:
+        >>> docs = get_source_chunks("Gonzalez_Woods_4th_Ed.pdf")
+        >>> print(len(docs), "chunks retrieved")
     """
-    Return a runnable summarisation chain.
+    from app.ingestion.pipeline import load_vectorstore
 
-    Returns
-    -------
-    Runnable
-        Accepts a list of ``Document`` objects and returns a summary string.
+    vs = load_vectorstore()
+
+    # Primary: metadata filter via .get() — no embedding call needed
+    try:
+        raw = vs._collection.get(
+            where={"source": source_filename},
+            limit=500,
+            include=["documents", "metadatas"],
+        )
+        docs = [
+            Document(page_content=text, metadata=meta)
+            for text, meta in zip(raw["documents"], raw["metadatas"])
+            if text and text.strip()
+        ]
+    except Exception as exc:
+        logger.warning(
+            "Metadata-filter retrieval failed (%s); falling back to similarity search.", exc
+        )
+        # Fallback: similarity search with source filter
+        docs = vs.similarity_search(
+            "", k=500, filter={"source": source_filename}
+        )
+
+    if not docs:
+        raise ValueError(
+            f"No chunks found for source '{source_filename}'. "
+            "Verify the filename matches the 'source' metadata stored during ingestion."
+        )
+
+    docs.sort(key=lambda d: d.metadata.get("page", 0))
+    logger.info("Retrieved %d chunks for '%s'.", len(docs), source_filename)
+    return docs
+
+
+# ---------------------------------------------------------------------------
+# Summarisation
+# ---------------------------------------------------------------------------
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    reraise=True,
+)
+def _invoke_summarize_chain(chain, docs: list[Document]) -> str:
+    """Invoke the summarisation chain with tenacity retry on Gemini 429."""
+    result = chain.invoke(docs)
+    # load_summarize_chain returns either a str or {"output_text": str}
+    if isinstance(result, dict):
+        return result.get("output_text", str(result))
+    return str(result)
+
+
+def summarize_document(source_filename: str) -> str:
+    """Generate a map-reduce academic summary for *source_filename*.
+
+    Retrieves all chunks from ChromaDB, optionally samples every 3rd chunk
+    if the total text exceeds 100,000 characters (to stay within Gemini's
+    context window), then runs a map-reduce summarisation chain.
+
+    Gemini 429 rate-limit errors are retried up to 3 times with exponential
+    back-off (4 s → 8 s → 60 s) via :func:`tenacity`.
+
+    Args:
+        source_filename: Exact filename as stored in chunk metadata.
+
+    Returns:
+        Markdown-formatted summary string headed with
+        ``# Summary: {source_filename}``.
+
+    Raises:
+        ValueError: Propagated from :func:`get_source_chunks` if no chunks found.
+
+    Example:
+        >>> summary = summarize_document("Gonzalez_Woods_4th_Ed.pdf")
+        >>> print(summary[:200])
     """
-    from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain.chains.summarize import load_summarize_chain
+    from langchain_core.prompts import PromptTemplate
+    from app.chains.rag_chain import get_llm
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
-        google_api_key=os.environ["GOOGLE_API_KEY"],
-        temperature=0.1,
-    )
+    docs = get_source_chunks(source_filename)
+
+    # Sample every 3rd chunk if content is very large
+    total_chars = sum(len(d.page_content) for d in docs)
+    if total_chars > 100_000:
+        docs = docs[::3]
+        logger.info(
+            "Sampling every 3rd chunk for '%s' (total chars: %d > 100,000).",
+            source_filename, total_chars,
+        )
+
+    map_prompt = PromptTemplate(input_variables=["text"], template=_MAP_TEMPLATE)
+    combine_prompt = PromptTemplate(input_variables=["text"], template=_COMBINE_TEMPLATE)
 
     chain = load_summarize_chain(
-        llm,
+        llm=get_llm(),
         chain_type="map_reduce",
-        map_prompt=_MAP_PROMPT,
-        combine_prompt=_REDUCE_PROMPT,
+        map_prompt=map_prompt,
+        combine_prompt=combine_prompt,
         verbose=False,
     )
-    return chain
+
+    logger.info(
+        "Starting map-reduce summarisation for '%s' (%d chunks).",
+        source_filename, len(docs),
+    )
+    summary_text = _invoke_summarize_chain(chain, docs)
+    logger.info("Summarisation complete for '%s'.", source_filename)
+
+    return f"# Summary: {source_filename}\n\n{summary_text}"
+
+
+# ---------------------------------------------------------------------------
+# Study question generation
+# ---------------------------------------------------------------------------
+
+def generate_study_questions(source_filename: str, n: int = 5) -> list[str]:
+    """Generate *n* exam-style study questions from *source_filename*.
+
+    Samples up to 20 evenly-spaced representative chunks from the document,
+    concatenates their text, and prompts the LLM to produce *n* questions
+    covering conceptual, mathematical, and applied question types.
+
+    Args:
+        source_filename: Exact filename as stored in chunk metadata.
+        n: Number of questions to generate (default 5; range 1–10).
+
+    Returns:
+        List of *n* question strings (without numbering prefixes).
+
+    Raises:
+        ValueError: Propagated from :func:`get_source_chunks` if no chunks found.
+
+    Example:
+        >>> questions = generate_study_questions("Gonzalez_Woods_4th_Ed.pdf", n=5)
+        >>> for q in questions:
+        ...     print("-", q)
+    """
+    from app.chains.rag_chain import get_llm
+
+    docs = get_source_chunks(source_filename)
+
+    # Sample up to 20 evenly-spaced chunks for representative coverage
+    sample_size = min(20, len(docs))
+    step = max(1, len(docs) // sample_size)
+    sampled = docs[::step][:sample_size]
+    context_text = "\n\n".join(d.page_content for d in sampled)
+
+    prompt = (
+        f"Based on the following Digital Image Processing content, generate exactly {n} "
+        "exam-style questions. Mix question types:\n"
+        "  • Conceptual (define / explain)\n"
+        "  • Mathematical (derive / calculate)\n"
+        "  • Applied (implement / compare)\n"
+        "Format as a numbered list. Provide only the questions — no answers.\n\n"
+        f"CONTENT:\n{context_text}\n\n"
+        f"EXACTLY {n} EXAM QUESTIONS:"
+    )
+
+    llm = get_llm()
+    response = llm.invoke(prompt)
+    raw_text = response.content if hasattr(response, "content") else str(response)
+
+    # Parse numbered list: "1. Question text" → "Question text"
+    questions: list[str] = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        match = re.match(r"^\d+[\.\)]\s+(.+)", line)
+        if match:
+            questions.append(match.group(1))
+        elif line and not re.match(r"^(EXACTLY|CONTENT|exam|question)", line, re.I):
+            # Catch un-numbered lines that look like questions
+            if line.endswith("?") or (len(line) > 20 and len(questions) < n):
+                questions.append(line)
+
+    questions = [q for q in questions if q][:n]
+    logger.info(
+        "Generated %d study questions for '%s'.", len(questions), source_filename
+    )
+    return questions
