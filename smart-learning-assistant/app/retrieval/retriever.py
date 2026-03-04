@@ -23,7 +23,6 @@ Usage
 from __future__ import annotations
 
 import logging
-import os
 from typing import Callable
 
 from langchain_core.documents import Document
@@ -131,6 +130,7 @@ def get_guardrail_retriever(threshold: float = 0.25) -> Callable[[str], list[Doc
 
     Notes
     -----
+    - Initialization of Chroma is lazy (at first query), so API startup remains healthy.
     - The threshold should be tuned empirically by testing edge cases
       (e.g., "What is the capital of France?" should return []).
     - Chroma uses L2 distance, so lower values = higher similarity.
@@ -140,17 +140,17 @@ def get_guardrail_retriever(threshold: float = 0.25) -> Callable[[str], list[Doc
     Examples
     --------
     >>> guardrail_fn = get_guardrail_retriever(threshold=0.25)
-    >>> 
+    >>>
     >>> # In-domain query
     >>> dip_docs = guardrail_fn("What is histogram equalization?")
     >>> print(f"DIP question: {len(dip_docs)} documents retrieved")
-    >>> 
+    >>>
     >>> # Out-of-domain query
     >>> off_topic_docs = guardrail_fn("What is the capital of France?")
     >>> print(f"Off-topic question: {len(off_topic_docs)} documents (guardrail active)")
     """
-    vectorstore = load_vectorstore()
-    retriever_raw = get_retriever()
+    vectorstore = None
+    retriever_raw = None
 
     def guardrail_retriever(query: str) -> list[Document]:
         """
@@ -166,29 +166,42 @@ def get_guardrail_retriever(threshold: float = 0.25) -> Callable[[str], list[Doc
         list[Document]
             Either [] (out-of-domain) or top-k documents (in-domain).
         """
+        nonlocal vectorstore, retriever_raw
+
+        # Lazy initialize vectorstore/retriever on first request.
+        if vectorstore is None or retriever_raw is None:
+            try:
+                vectorstore = load_vectorstore()
+                retriever_raw = get_retriever()
+            except Exception as e:
+                logger.error("Retriever initialization failed: %s", e)
+                return []
+
         # Compute similarity of top-1 result.
         try:
             top1_with_score = vectorstore.similarity_search_with_score(query, k=1)
             if not top1_with_score:
-                logger.debug(f"Guardrail: no results for query. Returning [].")
+                logger.debug("Guardrail: no results for query. Returning [].")
                 return []
 
-            doc, score = top1_with_score[0]
-            logger.debug(f"Guardrail: top-1 score = {score:.3f}, threshold = {threshold}")
+            _, score = top1_with_score[0]
+            logger.info("Guardrail score=%.3f threshold=%.3f", score, threshold)
 
             # Chroma uses L2 distance; higher score = lower similarity.
             if score >= threshold:
                 logger.info(
-                    f"Guardrail activated: query too dissimilar (score {score:.3f} >= threshold {threshold}). "
-                    f"Returning no context — chain will refuse."
+                    "Guardrail activated: query too dissimilar (score %.3f >= threshold %.3f). Returning no context.",
+                    score,
+                    threshold,
                 )
                 return []
         except Exception as e:
-            logger.warning(f"Guardrail error during similarity check: {e}. Proceeding with full retrieval.")
+            logger.warning("Guardrail error during similarity check: %s. Returning [].", e)
+            return []
 
         # Query is in-domain; return full top-k retrieval.
         results = retriever_raw.invoke(query)
-        logger.debug(f"Guardrail passed: returned {len(results)} documents.")
+        logger.debug("Guardrail passed: returned %d documents.", len(results))
         return results
 
     return guardrail_retriever
