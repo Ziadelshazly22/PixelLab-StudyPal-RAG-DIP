@@ -276,7 +276,13 @@ def get_processed_sources(chroma_client: Any) -> set[str]:
 def _is_auth_error(exc: BaseException) -> bool:
     """
     Return True if the exception (or any chained cause) indicates an
-    unrecoverable API-key error that retrying cannot fix.
+    unrecoverable API-key or API-version error that retrying cannot fix.
+
+    Catches two distinct failure modes:
+    - 400 INVALID_ARGUMENT / API key expired  → key is invalid/expired
+    - 404 NOT_FOUND / model not found for v1beta → langchain-google-genai v2+
+      installed; it routes embeddings to the v1beta endpoint where
+      text-embedding-004 is not exposed (fix: pin langchain-google-genai<2.0)
     """
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -291,6 +297,10 @@ def _is_auth_error(exc: BaseException) -> bool:
                 "api key not valid",
                 "key expired",
                 "invalid_argument",
+                # 404 raised by google-genai SDK (langchain-google-genai v2+)
+                # when text-embedding-004 is unavailable at the v1beta endpoint
+                "not found for api version",
+                "not supported for embedcontent",
             )
         ):
             return True
@@ -344,10 +354,13 @@ def embed_and_store(
         except Exception as _batch_exc:
             if _is_auth_error(_batch_exc):
                 raise RuntimeError(
-                    "\n❌  Google API key is invalid or expired — aborting ingestion.\n"
-                    "    1. Get a new key → https://aistudio.google.com/app/apikey\n"
-                    "    2. Re-run the API Key cell with the new key\n"
-                    "    3. Re-run the ingestion cell"
+                    "\n❌  Embedding API error — aborting ingestion.\n\n"
+                    "  Possible cause A — API key expired / invalid:\n"
+                    "    1. Get a fresh key → https://aistudio.google.com/app/apikey\n"
+                    "    2. Re-run Cell 4b with the new key, then re-run Cell 5.\n\n"
+                    "  Possible cause B — langchain-google-genai v2 installed (404 v1beta):\n"
+                    "    Cell 1 must pin the package:  langchain-google-genai<2.0\n"
+                    "    Runtime → Restart session, then run ALL cells from Cell 1."
                 ) from _batch_exc
             logger.error(
                 "Failed to store batch after 3 retries — skipping %d chunks.",
