@@ -24,8 +24,8 @@ build/
 #DUAL-ENV STRATEGY: 
 #All application code lives in .py files.
 # Notebooks (.ipynb) are for heavy Colab tasks only [Colab-only workspaces].
-*.notebooks/ 
-*.ipynb
+# *.notebooks/ 
+# *.ipynb
 evaluation_report.md # Generated output, not source
 *.log
 .DS_Store
