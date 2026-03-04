@@ -42,7 +42,6 @@ def build_interface(rag_chain=None) -> gr.Blocks:
 
     with gr.Blocks(
         title="Smart Learning Assistant – DIP Tutor",
-        theme=gr.themes.Soft(),
     ) as demo:
         gr.Markdown(
             """
@@ -67,9 +66,6 @@ def build_interface(rag_chain=None) -> gr.Blocks:
                 "How does histogram equalisation improve image contrast?",
                 "What is the DFT and how is it used in image processing?",
             ],
-            retry_btn="🔄 Retry",
-            undo_btn="↩️ Undo",
-            clear_btn="🗑️ Clear",
         )  # noqa: F841
 
     return demo
@@ -77,4 +73,4 @@ def build_interface(rag_chain=None) -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = build_interface()
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False, theme=gr.themes.Soft())
