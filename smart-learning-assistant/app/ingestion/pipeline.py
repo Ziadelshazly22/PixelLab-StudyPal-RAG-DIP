@@ -40,6 +40,13 @@ Usage
 
     # From CLI (see scripts/run_ingestion.py)
     python scripts/run_ingestion.py
+
+Dual-environment support
+------------------------
+All paths are configurable via environment variables — no hardcoded paths.
+This file runs identically in Google Colab (heavy ingestion) and on a
+local / university server (CLI), with only ``CHROMA_PERSIST_DIR`` and
+``GOOGLE_API_KEY`` differing between environments.
 """
 
 from __future__ import annotations
@@ -74,30 +81,61 @@ _SUBDIR_TO_CATEGORY: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# FUNCTION 1 — Text extraction
+# SECTION 1 — PDF Text Extraction
 # ---------------------------------------------------------------------------
-def extract_text_from_pdf(pdf_path: str, category: str) -> list[Document]:
-    """
-    Extract text from a PDF file, one :class:`~langchain_core.documents.Document`
-    per page.
+def extract_text_from_pdf(pdf_path: str, category: str) -> list[dict]:
+    """Extract text from a PDF file, returning one dict per usable page.
+
+    Opens the file with PyMuPDF (fitz) first.  If the entire document yields
+    fewer than 100 characters (scanned / image-only PDF), the function
+    transparently falls back to ``pdfplumber`` for layout-aware extraction.
+
+    Pages with fewer than 50 characters after stripping (image-only,
+    diagram-only, or blank pages) are silently skipped and counted — they
+    do **not** raise an error.
+
+    The internal key ``_image_only_skipped`` is injected into the *first*
+    page's metadata so the caller can harvest aggregate skip counts without
+    changing the public shape of each page dict.
 
     Args:
         pdf_path: Absolute path to the PDF file.
-        category: One of ``"textbook"``, ``"core_vision"``, ``"utilities"`` —
-                  stored in chunk metadata for downstream filtering.
+        category: One of ``"textbook"``, ``"core_vision"``, ``"utilities"``.
+            Stored in every chunk's metadata for downstream filtering.
 
     Returns:
-        List of LangChain Document objects with metadata::
+        List of page dicts, one per extractable page::
 
-            {"source": filename, "page": int, "category": str, "file_path": str}
+            [
+                {
+                    "text": str,
+                    "metadata": {
+                        "source":    "filename.pdf",
+                        "page":      1,          # 1-based
+                        "category":  "textbook",
+                        "file_path": "/abs/path/file.pdf",
+                    },
+                },
+                ...
+            ]
 
-        Returns an **empty list** on failure — never raises.
+        Returns an **empty list** on any unrecoverable error — never raises.
+
+    Raises:
+        Nothing.  ``fitz.FileDataError`` and all other exceptions are caught,
+        logged, and result in an empty return value.
+
+    Example:
+        >>> pages = extract_text_from_pdf("data/raw/1_textbooks/dip.pdf", "textbook")
+        >>> print(pages[0]["metadata"])
+        {'source': 'dip.pdf', 'page': 1, 'category': 'textbook', 'file_path': '...'}
     """
     import fitz  # PyMuPDF
     import pdfplumber
 
     filename = Path(pdf_path).name
-    documents: list[Document] = []
+    pages: list[dict] = []
+    image_only_skipped = 0
 
     try:
         # ── Primary extraction: PyMuPDF ──────────────────────────────────
@@ -109,80 +147,119 @@ def extract_text_from_pdf(pdf_path: str, category: str) -> list[Document]:
             text = page.get_text("text")
 
             if len(text.strip()) < 50:
-                # Image-only / math-diagram page — skip silently
                 logger.debug(
-                    "Skipping page %d of %s (< 50 chars, likely image-only)",
+                    "Skipping page %d of %s (< 50 chars, likely image-only).",
                     page_num + 1,
                     filename,
                 )
+                image_only_skipped += 1
                 continue
 
             total_text += text
-            documents.append(
-                Document(
-                    page_content=text,
-                    metadata={
+            pages.append(
+                {
+                    "text": text,
+                    "metadata": {
                         "source": filename,
                         "page": page_num + 1,
                         "category": category,
                         "file_path": pdf_path,
                     },
-                )
+                }
             )
 
         pdf.close()
 
-        # ── Fallback: pdfplumber if total text is suspiciously small ──────
-        if total_text.strip() and len(total_text.strip()) < 500:
+        # ── Fallback: pdfplumber when fitz total < 100 chars ─────────────
+        if len(total_text.strip()) < 100:
             logger.warning(
-                "PyMuPDF yielded < 500 chars for %s — retrying with pdfplumber.",
+                "PyMuPDF yielded < 100 chars for %s — retrying with pdfplumber.",
                 filename,
             )
-            documents = []
+            pages = []
+            image_only_skipped = 0
             with pdfplumber.open(pdf_path) as pdf_pl:
-                for page_num, page in enumerate(pdf_pl.pages):
-                    text = page.extract_text() or ""
+                for page_num, page_pl in enumerate(pdf_pl.pages):
+                    text = page_pl.extract_text() or ""
                     if len(text.strip()) < 50:
                         logger.debug(
-                            "pdfplumber: skipping page %d of %s (< 50 chars)",
+                            "pdfplumber: skipping page %d of %s (< 50 chars).",
                             page_num + 1,
                             filename,
                         )
+                        image_only_skipped += 1
                         continue
-                    documents.append(
-                        Document(
-                            page_content=text,
-                            metadata={
+                    pages.append(
+                        {
+                            "text": text,
+                            "metadata": {
                                 "source": filename,
                                 "page": page_num + 1,
                                 "category": category,
                                 "file_path": pdf_path,
                             },
-                        )
+                        }
                     )
 
-        logger.info("Extracted %d pages from %s", len(documents), filename)
+        logger.info(
+            "Extracted %d pages from %s  (%d image-only pages skipped).",
+            len(pages),
+            filename,
+            image_only_skipped,
+        )
 
+    except fitz.FileDataError as exc:
+        logger.error(
+            "fitz.FileDataError reading %s: %s — skipping file.", filename, exc
+        )
+        return []
     except Exception:
-        logger.error("Failed to extract text from %s", pdf_path, exc_info=True)
+        logger.error(
+            "Failed to extract text from %s", pdf_path, exc_info=True
+        )
         return []
 
-    return documents
+    # Embed skip count in first page metadata for aggregation by the caller.
+    if pages:
+        pages[0]["metadata"]["_image_only_skipped"] = image_only_skipped
+
+    return pages
 
 
 # ---------------------------------------------------------------------------
-# FUNCTION 2 — Chunking
+# SECTION 2 — Chunking
 # ---------------------------------------------------------------------------
-def chunk_documents(documents: list[Document]) -> list[Document]:
-    """
-    Split documents into overlapping chunks, preserving all metadata.
+def chunk_documents(pages: list[dict]) -> list[Document]:
+    """Split page dicts into overlapping LangChain Document chunks.
+
+    Converts each page dict (``{"text": str, "metadata": dict}``) to a
+    :class:`~langchain_core.documents.Document`, then applies
+    :class:`~langchain_text_splitters.RecursiveCharacterTextSplitter`
+    with parameters tuned for technical / academic text:
+
+    - ``chunk_size=800`` — fits Google ``text-embedding-004``'s sweet spot
+      and keeps LaTeX formula context intact within a chunk.
+    - ``chunk_overlap=150`` — ensures sentence-boundary continuity across
+      chunk borders.
+    - Separator hierarchy: paragraph → newline → sentence → word → char.
 
     Args:
-        documents: Output from :func:`extract_text_from_pdf`.
+        pages: Output from :func:`extract_text_from_pdf`.  Each element is::
+
+            {"text": str, "metadata": {"source": str, "page": int, ...}}
 
     Returns:
-        List of chunk Documents with all original metadata plus
-        ``{"chunk_index": int}``.
+        List of :class:`~langchain_core.documents.Document` objects.
+        Every chunk inherits the parent page's metadata and gains an
+        additional ``"chunk_index"`` key (0-based, scoped to the whole run).
+        The internal ``_image_only_skipped`` key is stripped before storage.
+
+    Example:
+        >>> pages = extract_text_from_pdf("dip.pdf", "textbook")
+        >>> chunks = chunk_documents(pages)
+        >>> chunks[0].metadata
+        {'source': 'dip.pdf', 'page': 1, 'category': 'textbook',
+         'file_path': '...', 'chunk_index': 0}
     """
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -191,37 +268,56 @@ def chunk_documents(documents: list[Document]) -> list[Document]:
         chunk_overlap=150,
         separators=["\n\n", "\n", ".", " ", ""],
     )
+
+    # Convert page dicts → Documents, stripping internal stats keys
+    documents: list[Document] = [
+        Document(
+            page_content=p["text"],
+            metadata={k: v for k, v in p["metadata"].items() if not k.startswith("_")},
+        )
+        for p in pages
+    ]
+
     raw_chunks = splitter.split_documents(documents)
 
-    chunks: list[Document] = []
     for idx, chunk in enumerate(raw_chunks):
         chunk.metadata["chunk_index"] = idx
-        chunks.append(chunk)
 
     logger.info(
-        "Created %d chunks from %d pages", len(chunks), len(documents)
+        "Created %d chunks from %d pages.", len(raw_chunks), len(pages)
     )
-    return chunks
+    return raw_chunks
 
 
 # ---------------------------------------------------------------------------
-# FUNCTION 3 — Embeddings
+# SECTION 3 — Embedding model
 # ---------------------------------------------------------------------------
-def get_embeddings(use_google: bool = True):
-    """
-    Return the embedding model.
+def get_embedding_model(use_google: bool = True):
+    """Return the active embedding model (Google primary, HuggingFace fallback).
 
     Strategy
     --------
-    - Primary  : :class:`~langchain_google_genai.GoogleGenerativeAIEmbeddings`
-                 (``EMBEDDING_MODEL`` from ``.env``, default ``models/text-embedding-004``)
-    - Fallback : :class:`~langchain_community.embeddings.HuggingFaceEmbeddings`
-                 (``all-MiniLM-L6-v2``, fully local, no API key required)
+    1. **Primary** — :class:`~langchain_google_genai.GoogleGenerativeAIEmbeddings`
+       using ``EMBEDDING_MODEL`` from ``.env`` (default ``models/text-embedding-004``).
+       Requires ``GOOGLE_API_KEY`` to be set and ``langchain-google-genai < 2.0``
+       installed (v2+ routes to the v1beta endpoint where the model is unavailable).
+    2. **Fallback** — :class:`~langchain_community.embeddings.HuggingFaceEmbeddings`
+       with ``all-MiniLM-L6-v2``.  Fully local, no API key required.
 
     Args:
-        use_google: Set ``False`` to skip straight to the local fallback.
+        use_google: Set ``False`` to force the local HuggingFace fallback.
+
+    Returns:
+        A LangChain-compatible embeddings object implementing
+        ``embed_documents`` / ``embed_query``.
+
+    Example:
+        >>> emb = get_embedding_model()
+        >>> vectors = emb.embed_documents(["What is convolution?"])
+        >>> len(vectors[0])
+        768
     """
-    if use_google:
+    if use_google and os.getenv("GOOGLE_API_KEY"):
         try:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
@@ -230,18 +326,22 @@ def get_embeddings(use_google: bool = True):
             return GoogleGenerativeAIEmbeddings(model=model)
         except Exception:
             logger.warning(
-                "Google embeddings failed, falling back to SentenceTransformers",
+                "Google embeddings failed — falling back to SentenceTransformers.",
                 exc_info=True,
             )
 
     from langchain_community.embeddings import HuggingFaceEmbeddings
 
-    logger.info("Using SentenceTransformers: all-MiniLM-L6-v2")
+    logger.info("Using SentenceTransformers fallback: all-MiniLM-L6-v2")
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
+# Backward-compatible alias used by external callers and older scripts
+get_embeddings = get_embedding_model
+
+
 # ---------------------------------------------------------------------------
-# FUNCTION 4 — Already-processed sources
+# SECTION 3 — Incremental source tracking
 # ---------------------------------------------------------------------------
 def get_processed_sources(chroma_client: Any) -> set[str]:
     """
@@ -271,7 +371,7 @@ def get_processed_sources(chroma_client: Any) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# FUNCTION 5 — Embed & store
+# SECTION 3 — Auth-error detection helper
 # ---------------------------------------------------------------------------
 def _is_auth_error(exc: BaseException) -> bool:
     """
@@ -308,35 +408,58 @@ def _is_auth_error(exc: BaseException) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# SECTION 3 — Batch insertion with retry
+# ---------------------------------------------------------------------------
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 def _add_with_retry(vector_store, batch: list[Document]) -> None:
-    """Add one batch to Chroma, with automatic tenacity retries."""
+    """Add one batch to Chroma, with automatic tenacity retries.
+
+    Args:
+        vector_store: Initialised :class:`~langchain_chroma.Chroma` instance.
+        batch:        A slice of chunk Documents to embed and store.
+    """
     vector_store.add_documents(batch)
 
 
 def embed_and_store(
     chunks: list[Document],
-    embeddings,
     persist_dir: str,
     batch_size: int = 50,
-) -> int:
-    """
-    Embed *chunks* and persist them to the ChromaDB collection in batches.
+):
+    """Embed *chunks* and persist them to the ChromaDB collection in batches.
+
+    Creates (or opens) the ``dip_knowledge_base`` Chroma collection at
+    *persist_dir*.  Chunks are sent to the Google embedding API in batches
+    of *batch_size* with a 1.2-second sleep between batches to stay within
+    Google's 1 500 req/min rate limit.
+
+    On an unrecoverable API error (expired key, wrong SDK version), raises
+    a :class:`RuntimeError` immediately with human-readable remediation steps.
 
     Args:
         chunks:      Output from :func:`chunk_documents`.
-        embeddings:  Embedding model from :func:`get_embeddings`.
-        persist_dir: Path to the ``chroma_db`` directory.
-        batch_size:  Chunks per embedding API call (default 50).
-                     A 1-second sleep between batches keeps throughput
-                     within Google's ~1 500 req/min rate limit.
+        persist_dir: Path to the persistent ChromaDB directory.
+        batch_size:  Chunks per embedding API call.  Default ``50``.
 
     Returns:
-        Number of chunks successfully stored.
+        The :class:`~langchain_chroma.Chroma` vector-store instance (for
+        downstream use or verification).
+
+    Raises:
+        RuntimeError: If an unrecoverable API key / model-version error is
+            detected.  Human-readable remediation steps are included in the
+            message.
+
+    Example:
+        >>> vs = embed_and_store(chunks, persist_dir="./data/chroma_db")
+        >>> vs._collection.count()
+        372
     """
     from langchain_chroma import Chroma
     from tqdm import tqdm
 
+    embeddings = get_embedding_model()
     vector_store = Chroma(
         persist_directory=persist_dir,
         embedding_function=embeddings,
@@ -346,21 +469,21 @@ def embed_and_store(
     stored = 0
     batches = [chunks[i : i + batch_size] for i in range(0, len(chunks), batch_size)]
 
-    for batch in tqdm(batches, desc="Embedding batches", unit="batch"):
+    for batch in tqdm(batches, desc="Embedding chunks", unit="batch"):
         try:
             _add_with_retry(vector_store, batch)
             stored += len(batch)
-            time.sleep(1)  # respect Google embedding rate limit
+            time.sleep(1.2)  # respect Google's 1 500 req/min rate limit
         except Exception as _batch_exc:
             if _is_auth_error(_batch_exc):
                 raise RuntimeError(
                     "\n❌  Embedding API error — aborting ingestion.\n\n"
-                    "  Possible cause A — API key expired / invalid:\n"
-                    "    1. Get a fresh key → https://aistudio.google.com/app/apikey\n"
-                    "    2. Re-run Cell 4b with the new key, then re-run Cell 5.\n\n"
-                    "  Possible cause B — langchain-google-genai v2 installed (404 v1beta):\n"
-                    "    Cell 1 must pin the package:  langchain-google-genai<2.0\n"
-                    "    Runtime → Restart session, then run ALL cells from Cell 1."
+                    "  Cause A — API key expired / invalid:\n"
+                    "    1. Get a fresh key  →  https://aistudio.google.com/app/apikey\n"
+                    "    2. Re-run the 'Update API Key' cell, then re-run ingestion.\n\n"
+                    "  Cause B — langchain-google-genai v2 installed (404 v1beta):\n"
+                    "    Cell 2 must pin:  langchain-google-genai<2.0\n"
+                    "    Runtime → Restart session, then run ALL cells from Cell 2."
                 ) from _batch_exc
             logger.error(
                 "Failed to store batch after 3 retries — skipping %d chunks.",
@@ -369,37 +492,54 @@ def embed_and_store(
             )
 
     total = vector_store._collection.count()
-    logger.info("Stored %d chunks; total collection size: %d", stored, total)
-    return stored
+    logger.info(
+        "Stored %d new chunks this run; total collection size: %d", stored, total
+    )
+    return vector_store
 
 
 # ---------------------------------------------------------------------------
-# FUNCTION 6 — Main orchestrator
+# SECTION 4 — Orchestrator
 # ---------------------------------------------------------------------------
 def run_ingestion_pipeline(
     raw_dir: str = "./data/raw",
     persist_dir: str | None = None,
+    batch_size: int = 50,
 ) -> dict:
-    """
-    Full ingestion pipeline: scan → extract → chunk → embed → persist.
+    """Full ingestion pipeline: scan → extract → chunk → embed → persist.
 
-    Skips PDFs whose filenames are already present in the collection
-    (incremental / resumable runs).
+    Scans all three category sub-directories under *raw_dir*, skips files
+    whose filenames are already present in the ChromaDB collection
+    (incremental / resumable across sessions), and stores all new chunks.
+
+    Auth errors (expired API key, wrong SDK version) are re-raised
+    immediately so Colab / CLI callers see a clear failure message.
+    All other per-file errors are caught, recorded in ``stats["errors"]``,
+    and execution continues with the next file.
 
     Args:
         raw_dir:     Root directory containing the three category sub-folders.
+            Defaults to ``./data/raw``.
         persist_dir: ChromaDB persistence directory.
-                     Defaults to ``$CHROMA_PERSIST_DIR`` or ``./data/chroma_db``.
+            Defaults to ``$CHROMA_PERSIST_DIR`` or ``./data/chroma_db``.
+        batch_size:  Chunks per embedding API batch.  Default ``50``.
 
     Returns:
         Statistics dictionary::
 
             {
-                "processed_files": int,
-                "skipped_files":   int,
-                "total_chunks":    int,
-                "errors":          list[str],
+                "processed_files":    int,
+                "skipped_files":      int,   # already in DB
+                "total_pages":        int,
+                "total_chunks":       int,
+                "image_only_skipped": int,   # pages with < 50 chars
+                "errors":             list[str],
             }
+
+    Example:
+        >>> stats = run_ingestion_pipeline(raw_dir="/content/drive/MyDrive/.../data/raw")
+        >>> print(stats["total_chunks"])
+        2847
     """
     import chromadb
 
@@ -411,15 +551,14 @@ def run_ingestion_pipeline(
     stats: dict[str, Any] = {
         "processed_files": 0,
         "skipped_files": 0,
+        "total_pages": 0,
         "total_chunks": 0,
+        "image_only_skipped": 0,
         "errors": [],
     }
 
-    # Initialise ChromaDB client and embeddings once for the whole run
     chroma_client = chromadb.PersistentClient(path=persist_dir)
-    processed_sources = get_processed_sources(chroma_client)
-    embeddings = get_embeddings(use_google=True)
-
+    collection = chroma_client.get_or_create_collection(_COLLECTION_NAME)
     raw_path = Path(raw_dir)
 
     for subdir_name, category in _SUBDIR_TO_CATEGORY.items():
@@ -430,7 +569,7 @@ def run_ingestion_pipeline(
 
         pdf_files = sorted(subdir.glob("**/*.pdf"))
         logger.info(
-            "Scanning %s (%d PDF(s) found) → category=%s",
+            "Scanning %s  →  %d PDF(s) found  (category=%s)",
             subdir_name,
             len(pdf_files),
             category,
@@ -439,59 +578,97 @@ def run_ingestion_pipeline(
         for pdf_path in pdf_files:
             filename = pdf_path.name
 
-            if filename in processed_sources:
-                logger.info("Skipping already-processed: %s", filename)
-                stats["skipped_files"] += 1
-                continue
+            try:
+                existing = collection.get(where={"source": filename}, limit=1)
+                if existing.get("ids"):
+                    logger.info("Skipping already-ingested: %s", filename)
+                    stats["skipped_files"] += 1
+                    continue
+            except Exception:
+                logger.debug(
+                    "Per-file DB skip check failed for %s; continuing ingestion.",
+                    filename,
+                    exc_info=True,
+                )
 
             try:
-                docs = extract_text_from_pdf(str(pdf_path), category)
-                if not docs:
+                pages = extract_text_from_pdf(str(pdf_path), category)
+                if not pages:
                     stats["errors"].append(f"No text extracted from {filename}")
                     continue
 
-                chunks = chunk_documents(docs)
-                stored = embed_and_store(chunks, embeddings, persist_dir)
-                stats["processed_files"] += 1
-                stats["total_chunks"] += stored
+                # Harvest image-only skip count before chunking strips the key
+                img_skipped = pages[0].get("metadata", {}).pop(
+                    "_image_only_skipped", 0
+                )
+                stats["image_only_skipped"] += img_skipped
+                stats["total_pages"] += len(pages)
 
+                chunks = chunk_documents(pages)
+                embed_and_store(chunks, persist_dir, batch_size=batch_size)
+
+                stats["processed_files"] += 1
+                stats["total_chunks"] += len(chunks)
+
+            except RuntimeError:
+                # Auth / API-version errors: abort the whole pipeline
+                raise
             except Exception as exc:
                 msg = f"{filename}: {exc}"
                 logger.error("Pipeline error — %s", msg, exc_info=True)
                 stats["errors"].append(msg)
 
     logger.info(
-        "Ingestion complete: %d files processed, %d skipped, %d total chunks",
+        "Ingestion complete: %d files processed, %d skipped, "
+        "%d pages extracted, %d chunks stored, %d image-only pages skipped.",
         stats["processed_files"],
         stats["skipped_files"],
+        stats["total_pages"],
         stats["total_chunks"],
+        stats["image_only_skipped"],
     )
     return stats
 
 
 # ---------------------------------------------------------------------------
-# FUNCTION 7 — Load vector store (for retriever)
+# SECTION 3 — Load vector store (for retrieval)
 # ---------------------------------------------------------------------------
 def load_vectorstore(persist_dir: str | None = None):
-    """
-    Return the existing Chroma vector store for use by the retriever.
+    """Return the existing Chroma vector store for retrieval-time use.
 
-    Called by :mod:`app.retrieval.retriever` at query time — does **not**
-    re-ingest any documents.
+    This is a lightweight helper called by :mod:`app.retrieval.retriever`,
+    :mod:`app.summarization.summarizer`, and :mod:`app.evaluation.metrics`.
+    It does **not** re-ingest any documents.
 
     Args:
         persist_dir: Path to the persisted ChromaDB directory.
-                     Defaults to ``$CHROMA_PERSIST_DIR`` or ``./data/chroma_db``.
+            Defaults to ``$CHROMA_PERSIST_DIR`` env var or ``./data/chroma_db``.
 
     Returns:
         :class:`~langchain_chroma.Chroma` instance ready for similarity search.
+
+    Raises:
+        FileNotFoundError: If *persist_dir* does not exist on disk, i.e. the
+            ingestion pipeline has never been run.
+
+    Example:
+        >>> vs = load_vectorstore()
+        >>> vs.similarity_search("edge detection kernel", k=3)
     """
     from langchain_chroma import Chroma
 
     if persist_dir is None:
         persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
 
-    embeddings = get_embeddings(use_google=True)
+    if not Path(persist_dir).exists():
+        raise FileNotFoundError(
+            f"ChromaDB directory not found at '{persist_dir}'.\n"
+            "Run the ingestion pipeline first:\n"
+            "  python scripts/run_ingestion.py\n"
+            "or run notebooks/ingestion_colab.ipynb in Google Colab."
+        )
+
+    embeddings = get_embedding_model()
     return Chroma(
         persist_directory=persist_dir,
         embedding_function=embeddings,
@@ -500,11 +677,56 @@ def load_vectorstore(persist_dir: str | None = None):
 
 
 # ---------------------------------------------------------------------------
-# CLI entry-point (direct execution)
+# SECTION 4 — CLI entry-point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    import argparse
+
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%H:%M:%S",
     )
-    run_ingestion_pipeline()
+
+    parser = argparse.ArgumentParser(
+        description="Ingest PDFs into the dip_knowledge_base ChromaDB collection."
+    )
+    parser.add_argument(
+        "--raw-dir",
+        default=os.getenv("RAW_DIR", "./data/raw"),
+        help="Root directory containing the three PDF sub-folders.",
+    )
+    parser.add_argument(
+        "--persist-dir",
+        default=os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db"),
+        help="ChromaDB persistence directory.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=50,
+        help="Chunks per embedding API call (default: 50).",
+    )
+    args = parser.parse_args()
+
+    stats = run_ingestion_pipeline(
+        raw_dir=args.raw_dir,
+        persist_dir=args.persist_dir,
+        batch_size=args.batch_size,
+    )
+
+    # ── Final stats table ───────────────────────────────────────────────
+    sep = "─" * 38
+    print(f"\n{sep}")
+    print("  Ingestion complete")
+    print(sep)
+    print(f"  Total files processed   : {stats['processed_files']}")
+    print(f"  Skipped (already in DB) : {stats['skipped_files']}")
+    print(f"  Total pages extracted   : {stats['total_pages']}")
+    print(f"  Image-only pages skipped: {stats['image_only_skipped']}")
+    print(f"  Total chunks stored     : {stats['total_chunks']}")
+    if stats["errors"]:
+        print(f"  \u26a0\ufe0f  Errors ({len(stats['errors'])})")
+        for err in stats["errors"]:
+            print(f"    \u2022 {err}")
+    print(sep)
