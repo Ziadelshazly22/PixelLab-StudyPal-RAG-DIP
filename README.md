@@ -24,7 +24,7 @@ Built with **LangChain · LangServe · FastAPI · ChromaDB · Gradio**.
 
 ## Architecture
 
-```
+```text
 User (browser / API client)
         │
         ▼
@@ -59,7 +59,7 @@ User (browser / API client)
 
 ## Project Structure
 
-```
+```text
 smart-learning-assistant/
 ├── app/
 │   ├── api/                   # FastAPI routers
@@ -83,9 +83,28 @@ smart-learning-assistant/
 │   └── ui/                    # Gradio interface
 │       ├── __init__.py
 │       └── interface.py
-├── data/
-│   ├── raw/                   # Raw PDFs (Gonzalez & Woods, code docs)
-│   └── chroma_db/             # Persistent Chroma vector store
+├─── data/
+│    ├── chroma_db/             # Persistent Chroma vector store
+│    └── raw/
+│        │
+│        ├── 1_textbooks/
+│        │   │
+│        │   └── Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf
+│        │
+│        ├── 2_core_vision/
+│        │   │
+│        │   ├── opencv2ref.pdf
+│        │   │ 
+│        │   ├── numpy-user.pdf
+│        │   │
+│        │   └── scipy-ref.pdf
+│        │
+│        └── 3_python_utilities/
+│            │  
+│            ├── Matplotlib.pdf
+│            │     
+│            └── pillow.pdf    
+│     
 ├── notebooks/                 # Prototyping notebooks
 ├── tests/                     # Unit tests
 │   └── __init__.py
@@ -159,7 +178,7 @@ uvicorn main:app --reload
 ```
 
 | Endpoint | URL |
-|---|---|
+| --- | --- |
 | API root | `http://localhost:8000/` |
 | Interactive docs (Swagger) | `http://localhost:8000/docs` |
 | ReDoc | `http://localhost:8000/redoc` |
@@ -172,7 +191,7 @@ uvicorn main:app --reload
 Copy `.env.example` to `.env` and populate each value:
 
 | Variable | Required | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GOOGLE_API_KEY` | ✅ | Gemini API key (Google AI Studio) |
 | `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API key (fallback reasoning LLM) |
 | `CHROMA_PERSIST_DIR` | ✅ | Path to ChromaDB storage (default: `./data/chroma_db`) |
@@ -183,7 +202,7 @@ Copy `.env.example` to `.env` and populate each value:
 ## Module Overview
 
 | Module | File | Responsibility |
-|---|---|---|
+| --- | --- | --- |
 | `app.api` | `router.py` | Auxiliary REST endpoints (`/api/health`, `/api/info`) |
 | `app.chains` | `rag_chain.py` | LCEL RAG chain — retriever → prompt → Gemini 2.0 Flash → parser |
 | `app.ingestion` | `pipeline.py` | PDF → chunk → embed → persist to ChromaDB |
@@ -197,21 +216,27 @@ Copy `.env.example` to `.env` and populate each value:
 ## API Reference
 
 ### `GET /`
+
 Returns service status and navigation links.
 
 ### `GET /api/health`
+
 Liveness probe — returns `{"status": "ok"}`.
 
 ### `GET /api/info`
+
 Returns service version and active model names.
 
 ### `POST /rag/invoke` *(after ingestion)*
+
 LangServe-managed RAG chain endpoint.
+
 ```json
 { "input": "Explain the Sobel edge detection operator." }
 ```
 
 ### `GET /docs`
+
 Full OpenAPI / Swagger interactive documentation.
 
 ---
@@ -227,7 +252,7 @@ pytest tests/ -v
 ## Tech Stack
 
 | Layer | Library / Tool |
-|---|---|
+| --- | --- |
 | LLM orchestration | LangChain 0.2, LangServe 0.2 |
 | Primary LLM | Gemini 2.0 Flash (`langchain-google-genai`) |
 | Fallback LLM | DeepSeek-R1 |
@@ -245,4 +270,3 @@ pytest tests/ -v
 ## License
 
 See [LICENSE](../LICENSE).
-

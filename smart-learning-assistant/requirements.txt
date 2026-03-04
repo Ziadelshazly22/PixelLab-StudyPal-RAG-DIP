@@ -1,26 +1,64 @@
+# ── Core LangChain stack ────────────────────────────────────────────────────
 langchain==0.2.16
-langchain-google-genai
-langchain-community
-langchain-chroma
-langserve[all]
-httpx>=0.23.0,<0.28.0     # langserve 0.2.x requires VerifyTypes removed in httpx 0.28
+langchain-google-genai         # Gemini 2.0 Flash + Google text-embedding-004
+langchain-community            # HuggingFaceEmbeddings, PyMuPDFLoader, Ollama
+langchain-chroma               # ChromaDB integration
+langchainhub                   # Hub prompt pulls (optional)
+langserve[all]                 # LangServe REST routes
+httpx>=0.23.0,<0.28.0          # langserve 0.2.x requires VerifyTypes; removed in httpx 0.28
+
+# ── API / server ────────────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
+sse-starlette                  # server-sent events for streaming
+pydantic
+
+# ── UI ──────────────────────────────────────────────────────────────────────
 gradio
+
+# ── LLM / embeddings ────────────────────────────────────────────────────────
+google-generativeai            # Gemini REST SDK
+sentence-transformers          # all-MiniLM-L6-v2 fallback embedder
+
+# Remember  to Install Ollama (for the DeepSeek Deployment on University's Server)
+# from https://ollama.com and run `ollama pull deepseek-r1` in a separate terminal
+# — this runs in the background and takes time.don't need it until deployment.
+
+# ── Vector store ─────────────────────────────────────────────────────────────
 chromadb
-pymupdf
-pdfplumber
-python-docx
-sentence-transformers
-opencv-python-headless
+
+# ── Document loading ─────────────────────────────────────────────────────────
+pymupdf                        # PyMuPDFLoader (fitz)
+pdfplumber                     # table / layout-aware PDF parsing
+python-docx                    # .docx support
+
+# ── Nougat (LaTeX OCR) ───────────────────────────────────────────────────────
+nougat  # For Scientific Document OCR (LaTeX, math, tables)
+
+# ── Image / vision ───────────────────────────────────────────────────────────
+opencv-python
 scikit-image
+
+# ── Scientific computing ─────────────────────────────────────────────────────
 numpy
 scipy
 pandas
 matplotlib
 Pillow
+
+# ── Dataset utilities ────────────────────────────────────────────────────────
+datasets                       # HuggingFace datasets (evaluation splits)
+
+# ── Environment ──────────────────────────────────────────────────────────────
 python-dotenv
-ragas
-rouge-score
+
+# ── Evaluation ───────────────────────────────────────────────────────────────
+ragas                          # RAGAS faithfulness / relevancy / recall metrics
+rouge-score                    # ROUGE-L for summarisation evaluation
+
+# ── Dev / test ───────────────────────────────────────────────────────────────
 pytest
-Nougat
+tqdm
+
+
+

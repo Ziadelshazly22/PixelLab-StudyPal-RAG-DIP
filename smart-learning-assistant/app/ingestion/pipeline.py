@@ -3,9 +3,11 @@ app/ingestion/pipeline.py
 -------------------------
 Document ingestion pipeline:
 
-  1. Load PDFs from ``data/raw/`` using PyMuPDF (fitz) / pdfplumber
+  1. Load PDFs from ``data/raw/`` using PyMuPDF (fitz)
   2. Chunk text with LangChain's RecursiveCharacterTextSplitter
-  3. Embed chunks with sentence-transformers (all-MiniLM-L6-v2)
+  3. Embed chunks with:
+       - Primary  : Google ``text-embedding-004``  (when GOOGLE_API_KEY is set)
+       - Fallback : ``all-MiniLM-L6-v2``           (sentence-transformers, local)
   4. Persist to ChromaDB at ``CHROMA_PERSIST_DIR``
 """
 
@@ -20,7 +22,29 @@ load_dotenv()
 
 _CHROMA_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
 _COLLECTION = os.getenv("COLLECTION_NAME", "dip_knowledge_base")
+_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/text-embedding-004")
 _RAW_DIR = Path(__file__).parents[3] / "data" / "raw"
+
+
+def _get_embeddings():
+    """
+    Return the embedding model.
+
+    Strategy
+    --------
+    - If ``GOOGLE_API_KEY`` is present, use Google ``text-embedding-004``.
+    - Otherwise fall back to local ``all-MiniLM-L6-v2`` (no API key required).
+    """
+    if os.getenv("GOOGLE_API_KEY"):
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        print(f"[ingestion] Using Google embeddings: {_EMBEDDING_MODEL}")
+        return GoogleGenerativeAIEmbeddings(model=_EMBEDDING_MODEL)
+
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+
+    print("[ingestion] GOOGLE_API_KEY not set – falling back to all-MiniLM-L6-v2")
+    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
 def _load_pdfs(directory: Path) -> list:
@@ -59,9 +83,8 @@ def _chunk_documents(docs: list) -> list:
 def _build_vector_store(chunks: list):
     """Embed chunks and persist them in ChromaDB."""
     from langchain_chroma import Chroma
-    from langchain_community.embeddings import HuggingFaceEmbeddings
 
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = _get_embeddings()
     vector_store = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
