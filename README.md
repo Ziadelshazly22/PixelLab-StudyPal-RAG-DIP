@@ -24,7 +24,7 @@ Built with **LangChain · LangServe · FastAPI · ChromaDB · Gradio**.
 
 ## Architecture
 
-```text
+```plaintext
 User (browser / API client)
         │
         ▼
@@ -51,7 +51,7 @@ User (browser / API client)
    Gradio UI  (/ui)
 ```
 
-**Ingestion pipeline:** `data/raw/*.pdf` → PyMuPDF loader → `RecursiveCharacterTextSplitter` → `all-MiniLM-L6-v2` embeddings → ChromaDB
+**Ingestion pipeline:** `data/raw/*.pdf` → PyMuPDF loader → `RecursiveCharacterTextSplitter` → embeddings *(Google `text-embedding-004` primary / `all-MiniLM-L6-v2` fallback)* → ChromaDB
 
 **Query pipeline:** Question → MMR retrieval → LCEL chain (prompt + LLM) → cited answer
 
@@ -112,7 +112,6 @@ smart-learning-assistant/
 ├── .gitignore
 ├── main.py                    # FastAPI + LangServe entry point
 ├── requirements.txt
-├── validate_setup.py          # Import health-check script
 └── README.md
 ```
 
@@ -154,14 +153,7 @@ cp .env.example .env
 # Open .env and fill in your API keys
 ```
 
-### 4. Validate the installation
-
-```bash
-python validate_setup.py
-# Expected: ✅ OK for all 10 critical libraries
-```
-
-### 5. Ingest your documents
+### 4. Ingest your documents
 
 Drop PDF files (e.g. *Gonzalez & Woods – Digital Image Processing*) into `data/raw/`, then run:
 
@@ -169,7 +161,7 @@ Drop PDF files (e.g. *Gonzalez & Woods – Digital Image Processing*) into `data
 python -m app.ingestion.pipeline
 ```
 
-### 6. Start the server
+### 5. Start the server
 
 ```bash
 python main.py
@@ -192,10 +184,12 @@ Copy `.env.example` to `.env` and populate each value:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `GOOGLE_API_KEY` | ✅ | Gemini API key (Google AI Studio) |
-| `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API key (fallback reasoning LLM) |
+| `GOOGLE_API_KEY` | ✅ | Gemini API key — [Google AI Studio](https://aistudio.google.com/app/apikey) |
+| `EMBEDDING_MODEL` | ✅ | Embedding model name (default: `models/text-embedding-004`) |
+| `LLM_MODEL` | ✅ | Primary LLM model name (default: `gemini-2.0-flash`) |
 | `CHROMA_PERSIST_DIR` | ✅ | Path to ChromaDB storage (default: `./data/chroma_db`) |
-| `COLLECTION_NAME` | ✅ | ChromaDB collection name (default: `dip_knowledge_base`) |
+| `OLLAMA_BASE_URL` | ⬜ | Ollama server URL for DeepSeek-R1 fallback (default: `http://localhost:11434`) |
+| `DEEPSEEK_MODEL` | ⬜ | DeepSeek model name served by Ollama (default: `deepseek-r1`) |
 
 ---
 
@@ -219,9 +213,13 @@ Copy `.env.example` to `.env` and populate each value:
 
 Returns service status and navigation links.
 
+### `GET /health`
+
+Top-level liveness probe — used by Docker / load-balancer health checks. Returns `{"status": "ok"}`.
+
 ### `GET /api/health`
 
-Liveness probe — returns `{"status": "ok"}`.
+Auxiliary liveness probe via the API router — returns `{"status": "ok"}`.
 
 ### `GET /api/info`
 
@@ -255,14 +253,16 @@ pytest tests/ -v
 | --- | --- |
 | LLM orchestration | LangChain 0.2, LangServe 0.2 |
 | Primary LLM | Gemini 2.0 Flash (`langchain-google-genai`) |
-| Fallback LLM | DeepSeek-R1 |
-| Vector store | ChromaDB 0.6 |
-| Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
+| Fallback LLM | DeepSeek-R1 via Ollama |
+| Primary embeddings | Google `text-embedding-004` (`langchain-google-genai`) |
+| Fallback embeddings | `all-MiniLM-L6-v2` (sentence-transformers, local) |
+| Vector store | ChromaDB (`langchain-chroma`) |
 | PDF parsing | PyMuPDF (fitz), pdfplumber |
-| API server | FastAPI 0.135, Uvicorn |
-| Chat UI | Gradio 6 |
-| Evaluation | RAGAS 0.4, ROUGE-score |
-| Image processing | OpenCV (headless), scikit-image |
+| LaTeX / math OCR | Nougat (`nougat-ocr`) |
+| API server | FastAPI, Uvicorn |
+| Chat UI | Gradio |
+| Evaluation | RAGAS, ROUGE-score |
+| Image processing | OpenCV, scikit-image |
 | Testing | pytest |
 
 ---

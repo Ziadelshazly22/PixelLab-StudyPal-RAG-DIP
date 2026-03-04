@@ -33,7 +33,7 @@ pdfplumber                     # table / layout-aware PDF parsing
 python-docx                    # .docx support
 
 # ── Nougat (LaTeX OCR) ───────────────────────────────────────────────────────
-nougat  # For Scientific Document OCR (LaTeX, math, tables)
+nougat-OCR  # For Scientific Document OCR (LaTeX, math, tables)
 
 # ── Image / vision ───────────────────────────────────────────────────────────
 opencv-python
@@ -58,7 +58,10 @@ rouge-score                    # ROUGE-L for summarisation evaluation
 
 # ── Dev / test ───────────────────────────────────────────────────────────────
 pytest
+pytest-asyncio
 tqdm
+tenacity
+
 
 
 

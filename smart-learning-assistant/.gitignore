@@ -20,5 +20,12 @@ data/chroma_db/
 dist/
 build/
 
-# Validation helper (run once, then delete)
-validate_setup.py
+# Notebooks 
+#DUAL-ENV STRATEGY: 
+#All application code lives in .py files.
+# Notebooks (.ipynb) are for heavy Colab tasks only [Colab-only workspaces].
+*.notebooks/ 
+*.ipynb
+evaluation_report.md # Generated output, not source
+*.log
+.DS_Store
