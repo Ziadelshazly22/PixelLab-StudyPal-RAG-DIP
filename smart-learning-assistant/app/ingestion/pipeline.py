@@ -273,6 +273,31 @@ def get_processed_sources(chroma_client: Any) -> set[str]:
 # ---------------------------------------------------------------------------
 # FUNCTION 5 — Embed & store
 # ---------------------------------------------------------------------------
+def _is_auth_error(exc: BaseException) -> bool:
+    """
+    Return True if the exception (or any chained cause) indicates an
+    unrecoverable API-key error that retrying cannot fix.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        msg = str(current).lower()
+        if any(
+            phrase in msg
+            for phrase in (
+                "api key expired",
+                "api_key_invalid",
+                "api key not valid",
+                "key expired",
+                "invalid_argument",
+            )
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 def _add_with_retry(vector_store, batch: list[Document]) -> None:
     """Add one batch to Chroma, with automatic tenacity retries."""
@@ -316,7 +341,14 @@ def embed_and_store(
             _add_with_retry(vector_store, batch)
             stored += len(batch)
             time.sleep(1)  # respect Google embedding rate limit
-        except Exception:
+        except Exception as _batch_exc:
+            if _is_auth_error(_batch_exc):
+                raise RuntimeError(
+                    "\n❌  Google API key is invalid or expired — aborting ingestion.\n"
+                    "    1. Get a new key → https://aistudio.google.com/app/apikey\n"
+                    "    2. Re-run the API Key cell with the new key\n"
+                    "    3. Re-run the ingestion cell"
+                ) from _batch_exc
             logger.error(
                 "Failed to store batch after 3 retries — skipping %d chunks.",
                 len(batch),
