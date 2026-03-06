@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MAP_TEMPLATE = """\
-You are summarising a section of a Digital Image Processing textbook.
+You are summarizing a section of a Digital Image Processing textbook.
 Preserve: key concepts, algorithm names, mathematical formulas (LaTeX notation),
 and any cited theorems. Be concise but technically precise.
 
