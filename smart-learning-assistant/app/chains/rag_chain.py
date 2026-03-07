@@ -111,6 +111,16 @@ MANDATORY RULES — Follow these strictly on every response:
    ### 🎓 Mentor's Note
    (A key takeaway, common pitfall to avoid, or why this matters in real-world 
    applications.)
+
+7. FORMAL CONCEPT GROUNDING (Non-negotiable for academic accuracy):
+   In the '### 📖 The Formal Concept' section you MUST derive every equation,
+   definition, and technical claim DIRECTLY from the RETRIEVED CONTEXT provided
+   in the human message. Do NOT add formulas, theorems, or facts from your training
+   data that are absent from those passages. If the context is incomplete, state
+   exactly which aspect is missing rather than filling the gap from memory.
+   The Intuition, Python Implementation, and Mentor's Note sections may
+   draw on broader knowledge — but the Formal Concept section must be
+   entirely traceable to the retrieved passages.
 """
 
 _HUMAN_MESSAGE = """\

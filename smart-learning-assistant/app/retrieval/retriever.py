@@ -41,7 +41,7 @@ class _EmptyRetriever(BaseRetriever):
         return []
 
 
-def get_retriever(k: int = 5, fetch_k: int = 20) -> BaseRetriever:
+def get_retriever(k: int = 8, fetch_k: int = 30) -> BaseRetriever:
     """
     Build a Maximal Marginal Relevance (MMR) retriever over ChromaDB.
 
@@ -96,11 +96,11 @@ def get_retriever(k: int = 5, fetch_k: int = 20) -> BaseRetriever:
     try:
         retriever = vectorstore.as_retriever(
             search_type="mmr",
-            search_kwargs={"k": k, "fetch_k": fetch_k},
+            search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": 0.7},
         )
         logger.info(
-            f"Retriever initialized with MMR (k={k}, fetch_k={fetch_k}). "
-            "Query results will be diverse and relevant."
+            f"Retriever initialized with MMR (k={k}, fetch_k={fetch_k}, lambda_mult=0.7). "
+            "Query results are relevance-weighted with light diversity."
         )
     except AttributeError:
         logger.warning(
