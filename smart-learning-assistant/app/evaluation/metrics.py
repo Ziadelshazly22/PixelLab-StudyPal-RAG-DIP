@@ -379,14 +379,18 @@ def run_ragas_scoring(intermediate_path: str | Path = _INTERMEDIATE_FILE) -> Any
 
     if groq_key:
         from langchain_groq import ChatGroq  # type: ignore
-        from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
+        except ImportError:
+            from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore  # noqa: F401
+        # llama-3.1-8b-instant: 500K TPD (5× more than 70b) — ideal for RAGAS judging
         ragas_llm = LangchainLLMWrapper(
-            ChatGroq(model="llama-3.3-70b-versatile", api_key=groq_key, temperature=0)
+            ChatGroq(model="llama-3.1-8b-instant", api_key=groq_key, temperature=0)
         )
         ragas_emb = LangchainEmbeddingsWrapper(
             HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         )
-        logger.info("RAGAS judge: Groq llama-3.3-70b-versatile + all-MiniLM-L6-v2 embeddings")
+        logger.info("RAGAS judge: Groq llama-3.1-8b-instant (500K TPD) + all-MiniLM-L6-v2 embeddings")
     elif google_key:
         from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings  # type: ignore
         ragas_llm = LangchainLLMWrapper(
@@ -402,12 +406,19 @@ def run_ragas_scoring(intermediate_path: str | Path = _INTERMEDIATE_FILE) -> Any
             "RAGAS will attempt OpenAI default (will fail without OPENAI_API_KEY)."
         )
 
+    from ragas import RunConfig  # type: ignore
+
+    # max_workers=2  → sequential-ish calls; avoids burst that triggers TPM/TPD limits
+    # timeout=120    → give each LLM call 2 min before giving up
+    run_cfg = RunConfig(timeout=120, max_workers=2)
+
     logger.info("Running RAGAS evaluation on %d questions...", len(data["questions"]))
     result = evaluate(
         dataset,
         metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
         llm=ragas_llm,
         embeddings=ragas_emb,
+        run_config=run_cfg,
     )
     logger.info("RAGAS complete.")
     return result.to_pandas()
