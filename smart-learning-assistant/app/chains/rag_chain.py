@@ -286,7 +286,10 @@ def build_rag_chain() -> Runnable:
         return []
 
     try:
-        guardrail_fn = get_guardrail_retriever(threshold=0.25)
+        # Threshold 1.2 is calibrated for all-MiniLM-L6-v2 (384-dim) L2 distances:
+        #   in-domain DIP content: 0.58–0.81  → passes (< 1.2)
+        #   off-topic queries:     1.46–1.54  → blocked (≥ 1.2)
+        guardrail_fn = get_guardrail_retriever(threshold=1.2)
         logger.info("Guardrail retriever initialized.")
     except KeyError as exc:
         logger.warning("ChromaDB schema compat issue: %s — passthrough fallback.", exc)

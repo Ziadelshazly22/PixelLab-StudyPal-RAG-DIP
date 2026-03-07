@@ -330,9 +330,11 @@ def get_embedding_model(use_google: bool = True):
                 exc_info=True,
             )
 
-    from langchain_community.embeddings import HuggingFaceEmbeddings
-
     logger.info("Using SentenceTransformers fallback: all-MiniLM-L6-v2")
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings  # preferred (no deprecation)
+    except ImportError:
+        from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore[no-redef]
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 
@@ -633,12 +635,79 @@ def run_ingestion_pipeline(
 # ---------------------------------------------------------------------------
 # SECTION 3 — Load vector store (for retrieval)
 # ---------------------------------------------------------------------------
+def _patch_chroma_config_json(db_path: str) -> None:
+    """Idempotent: ensure collections.config_json_str has the '_type' field.
+
+    ChromaDB 0.6+ requires ``config_json_str`` to contain
+    ``{"_type": "CollectionConfigurationInternal"}`` or it crashes with
+    ``KeyError: '_type'``.  Collections built on earlier versions (or on Colab
+    with certain chromadb builds) store ``{}`` which triggers the bug.  This
+    helper patches every affected row in-place so the application never needs
+    re-ingestion to recover.
+    """
+    import json
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT name, config_json_str FROM collections")
+        rows = cur.fetchall()
+        for name, cfg_str in rows:
+            try:
+                cfg = json.loads(cfg_str) if cfg_str else {}
+            except json.JSONDecodeError:
+                cfg = {}
+            if cfg.get("_type") != "CollectionConfigurationInternal":
+                patched = json.dumps({"_type": "CollectionConfigurationInternal"})
+                cur.execute(
+                    "UPDATE collections SET config_json_str=? WHERE name=?",
+                    (patched, name),
+                )
+                logger.debug("Patched config_json_str for collection '%s'.", name)
+        conn.commit()
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not patch chroma config_json_str: %s", exc)
+
+
+def _detect_collection_dim(db_path: str, collection_name: str = _COLLECTION_NAME) -> int | None:
+    """Read the stored vector dimension for *collection_name* from SQLite.
+
+    Returns the integer dimension, or ``None`` if it cannot be determined.
+    """
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT dimension FROM collections WHERE name=?", (collection_name,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        return int(row[0]) if row and row[0] is not None else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not detect collection dimension: %s", exc)
+        return None
+
+
 def load_vectorstore(persist_dir: str | None = None):
     """Return the existing Chroma vector store for retrieval-time use.
 
     This is a lightweight helper called by :mod:`app.retrieval.retriever`,
     :mod:`app.summarization.summarizer`, and :mod:`app.evaluation.metrics`.
     It does **not** re-ingest any documents.
+
+    On every call it:
+
+    1. Patches ``config_json_str`` in the SQLite if the ``_type`` field is
+       missing (ChromaDB 0.6+ compatibility fix — idempotent).
+    2. Reads the stored vector dimension and selects the matching embedding
+       model automatically:
+       - **384-dim** → ``all-MiniLM-L6-v2`` (HuggingFace, local)
+       - **768-dim** → ``models/text-embedding-004`` (Google)
+       - **unknown**  → follows normal primary/fallback logic
 
     Args:
         persist_dir: Path to the persisted ChromaDB directory.
@@ -660,6 +729,8 @@ def load_vectorstore(persist_dir: str | None = None):
     if persist_dir is None:
         persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
 
+    persist_dir = str(Path(persist_dir).resolve())
+
     if not Path(persist_dir).exists():
         raise FileNotFoundError(
             f"ChromaDB directory not found at '{persist_dir}'.\n"
@@ -668,7 +739,30 @@ def load_vectorstore(persist_dir: str | None = None):
             "or run notebooks/ingestion_colab.ipynb in Google Colab."
         )
 
-    embeddings = get_embedding_model()
+    db_path = str(Path(persist_dir) / "chroma.sqlite3")
+
+    # Step 1: patch config_json_str so ChromaDB 0.6+ can open old collections
+    if Path(db_path).exists():
+        _patch_chroma_config_json(db_path)
+
+    # Step 2: auto-select embedding model that matches the stored dimension
+    stored_dim = _detect_collection_dim(db_path) if Path(db_path).exists() else None
+    if stored_dim == 384:
+        # Collection was built with all-MiniLM-L6-v2 (384-dim) — must match
+        logger.info(
+            "Detected 384-dim collection — using all-MiniLM-L6-v2 embeddings."
+        )
+        embeddings = get_embedding_model(use_google=False)
+    elif stored_dim == 768:
+        logger.info("Detected 768-dim collection — using Google text-embedding-004.")
+        embeddings = get_embedding_model(use_google=True)
+    else:
+        logger.info(
+            "Collection dimension unknown (%s) — using default embedding strategy.",
+            stored_dim,
+        )
+        embeddings = get_embedding_model()
+
     return Chroma(
         persist_directory=persist_dir,
         embedding_function=embeddings,

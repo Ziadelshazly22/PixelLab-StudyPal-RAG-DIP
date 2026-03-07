@@ -121,7 +121,7 @@ def get_retriever(k: int = 5, fetch_k: int = 20) -> BaseRetriever:
     return retriever
 
 
-def get_guardrail_retriever(threshold: float = 0.25) -> Callable[[str], list[Document]]:
+def get_guardrail_retriever(threshold: float = 1.2) -> Callable[[str], list[Document]]:
     """
     Build a guardrail-wrapped retriever that filters out-of-domain queries.
 

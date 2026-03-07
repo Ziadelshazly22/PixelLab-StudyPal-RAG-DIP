@@ -184,50 +184,26 @@ async def get_status() -> dict:
 
     total_chunks: int = -1
     sources: list[str] = []
-    
-    # Try direct chromadb access first (fastest when schema is compatible).
+
+    # Use load_vectorstore() — it auto-patches the SQLite config_json_str and
+    # selects the correct embedding model from the stored dimension.
     try:
-        import chromadb
+        from app.ingestion.pipeline import load_vectorstore
+        vs = load_vectorstore(persist_dir=persist_dir)
+        total_chunks = vs._collection.count()
 
-        client = chromadb.PersistentClient(path=persist_dir)
-        collection = client.get_collection(name=collection_name)
-        total_chunks = collection.count()
-
-        # Best-effort source extraction for UI dropdowns.
-        raw = collection.get(include=["metadatas"], limit=max(total_chunks, 1))
-        metas = raw.get("metadatas", []) if isinstance(raw, dict) else []
-        sources = sorted(
-            {
+        # Source extraction via metadata get (no embedding needed)
+        if total_chunks > 0:
+            raw = vs._collection.get(include=["metadatas"])
+            metas = raw.get("metadatas", []) if isinstance(raw, dict) else []
+            sources = sorted({
                 m.get("source")
                 for m in metas
                 if isinstance(m, dict) and m.get("source")
-            }
-        )
+            })
     except FileNotFoundError:
         total_chunks = 0
         logger.warning("/status: ChromaDB not found — run the ingestion pipeline first.")
-    except KeyError as exc:
-        # ChromaDB schema compatibility issue — collection created with older version.
-        # Fall back to LangChain Chroma wrapper which handles this gracefully.
-        if "_type" in str(exc):
-            logger.info("/status: ChromaDB schema issue detected, using LangChain wrapper fallback.")
-            try:
-                from app.ingestion.pipeline import load_vectorstore
-                vs = load_vectorstore(persist_dir=persist_dir)
-                total_chunks = vs._collection.count()
-                # Source extraction: sample up to 100 docs via similarity search
-                if total_chunks > 0:
-                    sample_docs = vs.similarity_search("", k=min(total_chunks, 100))
-                    sources = sorted(set(
-                        doc.metadata.get("source")
-                        for doc in sample_docs
-                        if doc.metadata.get("source")
-                    ))
-            except Exception as fallback_exc:
-                logger.warning("/status: LangChain fallback also failed: %s", fallback_exc)
-                total_chunks = -1
-        else:
-            logger.warning("/status: Key error while reading Chroma: %s", exc)
     except Exception as exc:
         logger.warning("/status: Could not read chunk count: %s", exc)
 
