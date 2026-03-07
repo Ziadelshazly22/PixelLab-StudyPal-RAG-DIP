@@ -1,11 +1,11 @@
 # ── Core LangChain stack ────────────────────────────────────────────────────
-langchain==0.2.16
+langchain                      # LangChain 1.x core (upgraded from 0.2.16)
+langchain-classic              # ConversationalRetrievalChain, ConversationBufferWindowMemory, load_summarize_chain
 langchain-google-genai         # Gemini 2.0 Flash + Google text-embedding-004
-langchain-community            # HuggingFaceEmbeddings, PyMuPDFLoader, Ollama
+langchain-community            # HuggingFaceEmbeddings (fallback), PyMuPDFLoader, Ollama
+langchain-huggingface          # HuggingFaceEmbeddings (modern, non-deprecated)
 langchain-chroma               # ChromaDB integration
 langchainhub                   # Hub prompt pulls (optional)
-langserve[all]                 # LangServe REST routes
-httpx>=0.23.0,<0.28.0          # langserve 0.2.x requires VerifyTypes; removed in httpx 0.28
 
 # ── API / server ────────────────────────────────────────────────────────────
 fastapi

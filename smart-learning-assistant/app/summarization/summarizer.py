@@ -165,7 +165,7 @@ def summarize_document(source_filename: str) -> str:
         >>> summary = summarize_document("Gonzalez_Woods_4th_Ed.pdf")
         >>> print(summary[:200])
     """
-    from langchain.chains.summarize import load_summarize_chain
+    from langchain_classic.chains.summarize import load_summarize_chain
     from langchain_core.prompts import PromptTemplate
     from app.chains.rag_chain import get_llm
 

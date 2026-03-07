@@ -33,7 +33,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.documents import Document
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import (
@@ -209,7 +209,6 @@ def get_llm() -> BaseLanguageModel:
 
     if backend == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        from pydantic.v1 import SecretStr  # langchain-google-genai uses pydantic v1 compat
 
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
@@ -218,7 +217,7 @@ def get_llm() -> BaseLanguageModel:
         logger.info("Using Gemini 2.0 Flash as primary LLM (free tier, demo/dev environment)")
         return ChatGoogleGenerativeAI(
             model="gemini-2.0-flash",
-            api_key=SecretStr(api_key),
+            api_key=api_key,  # langchain-google-genai 4.x expects plain str
             temperature=0.2,
         )
 
@@ -346,8 +345,8 @@ def get_or_create_chain(session_id: str):
         >>> result["answer"]
         '...'
     """
-    from langchain.chains import ConversationalRetrievalChain
-    from langchain.memory import ConversationBufferWindowMemory
+    from langchain_classic.chains import ConversationalRetrievalChain
+    from langchain_classic.memory import ConversationBufferWindowMemory
 
     with _STORE_LOCK:
         if session_id in MEMORY_STORE:
