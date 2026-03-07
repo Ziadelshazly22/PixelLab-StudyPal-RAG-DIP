@@ -73,10 +73,14 @@ _CHAT_TIMEOUT = 120  # seconds
 
 _REFUSAL_PHRASE = "out of focus"   # matches prompt: "this question falls out of focus"
 
-# Delay between consecutive Gemini requests (seconds).
-# Free tier ceiling is 15 RPM = 1 request / 4 s.  Default 5 s gives headroom.
-# Override with EVAL_REQUEST_DELAY env var if needed.
-_REQUEST_DELAY_S: float = float(os.getenv("EVAL_REQUEST_DELAY", "5"))
+# Delay between consecutive LLM requests (seconds).
+# Groq free tier: 6 000 TPM.  llama-3.3-70b responses ≈ 1 100 tok → max 5/min.
+# 15 s gives comfortable headroom; override with EVAL_REQUEST_DELAY env var.
+_REQUEST_DELAY_S: float = float(os.getenv("EVAL_REQUEST_DELAY", "15"))
+
+# Retry settings for transient (TPM) 503s — NOT for daily quota exhaustion.
+_MAX_LLM_RETRIES: int = 3
+_LLM_RETRY_WAIT_S: int = 65  # wait > 60 s for Groq's 1-minute TPM window to reset
 
 _RAGAS_TARGETS = {
     "faithfulness": 0.7,
@@ -115,12 +119,35 @@ def _is_daily_quota_exhausted(response: "requests.Response") -> bool:
         return False
 
 
+def _post_chat_with_retry(payload: dict, timeout: int) -> "requests.Response":
+    """POST to /chat, retrying up to _MAX_LLM_RETRIES times on transient 503s.
+
+    Groq's TPM rate-limit returns 503 (not 429) via the FastAPI wrapper.
+    We distinguish it from a *daily* quota exhaustion and retry after
+    _LLM_RETRY_WAIT_S seconds so the 1-minute TPM window resets.
+    """
+    resp: "requests.Response | None" = None
+    for attempt in range(_MAX_LLM_RETRIES):
+        resp = requests.post(_CHAT_URL, json=payload, timeout=timeout)
+        if resp.status_code == 503 and not _is_daily_quota_exhausted(resp):
+            if attempt < _MAX_LLM_RETRIES - 1:
+                logger.warning(
+                    "LLM rate-limited (503) on attempt %d/%d — "
+                    "waiting %ds for TPM window to reset …",
+                    attempt + 1, _MAX_LLM_RETRIES, _LLM_RETRY_WAIT_S,
+                )
+                time.sleep(_LLM_RETRY_WAIT_S)
+                continue
+        break
+    return resp  # type: ignore[return-value]
+
+
 def _preflight_quota_check() -> bool:
     """Send ONE tiny test request before running the full 18-question collection.
 
     Returns True if the key has usable quota, False (+ prints instructions) if not.
     """
-    logger.info("Pre-flight: testing Gemini quota with a 1-token probe...")
+    logger.info("Pre-flight: testing LLM quota with a 1-token probe...")
     test_payload = {"question": "hi", "session_id": str(uuid.uuid4())}
     try:
         r = requests.post(_CHAT_URL, json=test_payload, timeout=30)
@@ -196,16 +223,16 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
         bar.set_postfix_str(q["question"][:55] + "…", refresh=True)
         t0 = time.time()
         try:
-            resp = requests.post(_CHAT_URL, json=payload, timeout=_CHAT_TIMEOUT)
+            resp = _post_chat_with_retry(payload, _CHAT_TIMEOUT)
             latency = time.time() - t0
             if resp.status_code == 503 and _is_daily_quota_exhausted(resp):
                 daily_quota_hit = True
                 logger.error(
-                    "\n❌ Daily Gemini quota exhausted (GenerateRequestsPerDay limit = 0).\n"
+                    "\n❌ Daily LLM quota exhausted.\n"
                     "   Collection aborted after %d/%d questions.\n"
-                    "   Fix: get a fresh API key from a new Google account at "
-                    "https://aistudio.google.com/app/apikey\n"
-                    "   Then update GOOGLE_API_KEY in .env and restart the server.",
+                    "   Fix: check your API key quota at https://console.groq.com "
+                    "(Groq) or https://aistudio.google.com/app/apikey (Gemini)\n"
+                    "   Then update the key in .env and restart the server.",
                     i - 1, len(dip_questions),
                 )
                 answer = ""
@@ -267,7 +294,7 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
         payload = {"question": q["question"], "session_id": session_id}
         t0 = time.time()
         try:
-            resp = requests.post(_CHAT_URL, json=payload, timeout=_CHAT_TIMEOUT)
+            resp = _post_chat_with_retry(payload, _CHAT_TIMEOUT)
             latency = time.time() - t0
             if resp.status_code == 503 and _is_daily_quota_exhausted(resp):
                 logger.error("Daily quota exhausted during guardrail checks. Stopping.")
@@ -277,7 +304,7 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
             elif resp.status_code == 503:
                 answer = resp.json().get("detail", "")
                 passed = None
-                status = "UNKNOWN (quota)"
+                status = "UNKNOWN (quota — retries exhausted)"
             else:
                 resp.raise_for_status()
                 answer = resp.json().get("answer", "")

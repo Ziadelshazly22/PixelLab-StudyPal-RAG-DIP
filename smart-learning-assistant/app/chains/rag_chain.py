@@ -234,12 +234,33 @@ def get_llm() -> BaseLanguageModel:
             "Using Groq (%s) as primary LLM (free tier, no billing required)",
             groq_model,
         )
-        return ChatGroq(
-            model=groq_model,
-            api_key=groq_api_key,
-            temperature=0.2,
-            max_retries=0,
-        )
+        # Gate every LLM call to stay under Groq's 6 000 TPM free-tier ceiling.
+        # llama-3.1-8b-instant responses average ~600 tokens (2 calls/question).
+        # 0.06 req/s × 60 = 3.6 calls/min × 600 tok ≈ 2 160 tok/min (< 6 000).
+        try:
+            from langchain_core.rate_limiters import InMemoryRateLimiter
+            _groq_limiter = InMemoryRateLimiter(
+                requests_per_second=0.06,
+                check_every_n_seconds=0.1,
+                max_bucket_size=1,
+            )
+            return ChatGroq(
+                model=groq_model,
+                api_key=groq_api_key,
+                temperature=0.2,
+                max_tokens=2048,
+                max_retries=2,
+                rate_limiter=_groq_limiter,
+            )
+        except (ImportError, TypeError):
+            # Older langchain-core without InMemoryRateLimiter or rate_limiter kwarg.
+            return ChatGroq(
+                model=groq_model,
+                api_key=groq_api_key,
+                temperature=0.2,
+                max_tokens=2048,
+                max_retries=2,
+            )
 
     elif backend == "ollama":
         from langchain_community.chat_models import ChatOllama
