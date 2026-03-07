@@ -329,13 +329,28 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
 # PHASE B — RAGAS scoring (designed to run in Colab)
 # ===========================================================================
 
-def run_ragas_scoring(intermediate_path: str | Path = _INTERMEDIATE_FILE) -> Any:
+def run_ragas_scoring(
+    intermediate_path: str | Path = _INTERMEDIATE_FILE,
+    *,
+    max_workers: int = 2,
+    timeout: int = 120,
+) -> Any:
     """Load intermediate JSON and run RAGAS evaluation.
 
     Automatically selects the judge LLM:
-      1. GROQ_API_KEY set  → Groq llama-3.3-70b-versatile  (free, preferred)
+      1. GROQ_API_KEY set  → Groq llama-3.1-8b-instant    (free, preferred)
       2. GOOGLE_API_KEY set → Gemini 2.0 Flash             (fallback)
       3. Neither set        → RAGAS default (OpenAI — will error if no key)
+
+    Parameters
+    ----------
+    intermediate_path : str | Path
+        Path to the JSON file produced by Phase A (--phase collect).
+    max_workers : int
+        Max parallel RAGAS evaluation jobs (default 2).  Lower values avoid
+        Groq TPM/TPD rate-limit bursts.  Pass 1 for fully sequential.
+    timeout : int
+        Per-job timeout in seconds (default 120).
 
     Designed for Google Colab.  Run Phase A (collect) locally first.
 
@@ -408,9 +423,9 @@ def run_ragas_scoring(intermediate_path: str | Path = _INTERMEDIATE_FILE) -> Any
 
     from ragas import RunConfig  # type: ignore
 
-    # max_workers=2  → sequential-ish calls; avoids burst that triggers TPM/TPD limits
-    # timeout=120    → give each LLM call 2 min before giving up
-    run_cfg = RunConfig(timeout=120, max_workers=2)
+    # max_workers  → controls parallelism; low values avoid TPM/TPD burst errors
+    # timeout      → per-job ceiling before RAGAS marks the job as failed
+    run_cfg = RunConfig(timeout=timeout, max_workers=max_workers)
 
     logger.info("Running RAGAS evaluation on %d questions...", len(data["questions"]))
     result = evaluate(
