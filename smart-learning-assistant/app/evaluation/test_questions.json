@@ -1,0 +1,146 @@
+[
+  {
+    "id": 1,
+    "question": "What is spatial filtering and how does linear convolution apply to it?",
+    "ground_truth": "Spatial filtering is a neighborhood operation that replaces each pixel value with a function of the values in a defined neighborhood. Linear spatial filtering performs convolution by computing the sum of products between a filter mask (kernel) and the image region it overlaps, shifting the mask across the entire image.",
+    "topic": "Spatial filtering — linear filters, convolution",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 2,
+    "question": "How does the median filter remove salt-and-pepper noise?",
+    "ground_truth": "The median filter is a nonlinear spatial filter that replaces each pixel with the median value of its neighborhood. It is particularly effective for salt-and-pepper (impulse) noise because the extreme high/low noise values are never selected as the median, preserving edges better than linear averaging filters.",
+    "topic": "Spatial filtering — nonlinear (median filter, salt-and-pepper noise)",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 3,
+    "question": "What is the 2D Discrete Fourier Transform and what are its key properties?",
+    "ground_truth": "The 2D DFT transforms a spatial-domain image f(x,y) of size M×N into its frequency-domain representation F(u,v) using the formula F(u,v) = Σ Σ f(x,y) e^{-j2π(ux/M + vy/N)}. Key properties include linearity, translation, periodicity, conjugate symmetry (for real inputs), and the convolution theorem (convolution in spatial domain equals multiplication in frequency domain).",
+    "topic": "2D Discrete Fourier Transform — definition and properties",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 4,
+    "question": "What is the difference between an ideal low-pass filter and a Gaussian low-pass filter in the frequency domain?",
+    "ground_truth": "An ideal low-pass filter (ILPF) has a sharp circular cutoff: all frequencies within radius D0 from the origin pass unchanged and all others are zeroed, producing ringing (Gibbs phenomenon) in the spatial domain. A Gaussian low-pass filter (GLPF) has a smooth bell-shaped transfer function H(u,v) = e^{-D²(u,v)/2σ²}, which eliminates ringing at the cost of a less sharp cutoff.",
+    "topic": "Frequency domain filtering — ideal vs Gaussian low-pass",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 5,
+    "question": "How is the histogram equalization transformation function derived?",
+    "ground_truth": "Histogram equalization seeks a transformation s = T(r) that produces a uniform output histogram. For a continuous image, T(r) = (L-1)∫₀ʳ pᵣ(w)dw where pᵣ is the input probability density. For discrete images with intensity level rₖ, the transformation is sₖ = (L-1) Σⱼ₌₀ᵏ nⱼ/n, where nⱼ is the count of pixels at level j and n is the total pixel count.",
+    "topic": "Histogram equalization — derivation of the transformation function",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 6,
+    "question": "What is histogram specification (matching) and how does it differ from histogram equalization?",
+    "ground_truth": "Histogram specification transforms an image so its histogram matches a specified target histogram, rather than forcing a uniform distribution. The method equalize-transforms both the input and target histograms, then maps each equalized input level to the closest equalized target level using an inverse mapping, giving the user control over the output histogram shape.",
+    "topic": "Histogram specification / matching",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 7,
+    "question": "How is morphological erosion defined and what role does the structuring element play?",
+    "ground_truth": "Morphological erosion of set A by structuring element B is defined as A ⊖ B = {z | (B)_z ⊆ A}: the set of all points z for which the translated structuring element fits entirely inside A. The structuring element's shape and size determine the extent and nature of the erosion, shrinking objects and removing features smaller than B.",
+    "topic": "Morphological erosion — definition and structuring element",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 8,
+    "question": "What is morphological dilation and what is its dual relationship with erosion?",
+    "ground_truth": "Morphological dilation of A by B is defined as A ⊕ B = {z | (B̂)_z ∩ A ≠ ∅}: all points where the reflected/translated structuring element overlaps A at least one pixel, expanding objects. The duality with erosion is expressed as (A ⊖ B)ᶜ = Aᶜ ⊕ B̂, meaning erosion of A equals the complement of dilating A's complement by the reflected structuring element.",
+    "topic": "Morphological dilation — dual relationship with erosion",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 9,
+    "question": "What are morphological opening and closing operations and what are they used for?",
+    "ground_truth": "Opening (A ∘ B = (A ⊖ B) ⊕ B) applies erosion then dilation, smoothing contours, breaking narrow connections, and removing small objects. Closing (A • B = (A ⊕ B) ⊖ B) applies dilation then erosion, fusing narrow breaks, filling small holes, and smoothing boundaries. Opening is used for noise removal; closing is used for gap filling in segmentation.",
+    "topic": "Opening and closing operations — applications",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 10,
+    "question": "What are the Sobel gradient masks used for edge detection?",
+    "ground_truth": "The Sobel operator uses two 3×3 masks to approximate image gradients: Gx = [[-1,0,1],[-2,0,2],[-1,0,1]] detects horizontal edges (vertical gradient) and Gy = [[-1,-2,-1],[0,0,0],[1,2,1]] detects vertical edges (horizontal gradient). The gradient magnitude is |G| = √(Gx²+Gy²), and edge direction is θ = arctan(Gy/Gx).",
+    "topic": "Sobel edge detection — gradient masks",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 11,
+    "question": "What are the five steps of the Canny edge detector?",
+    "ground_truth": "The Canny detector proceeds as: (1) Smooth the image with a Gaussian filter to reduce noise. (2) Compute gradient magnitude and direction using a derivative filter (e.g., Sobel). (3) Apply non-maximum suppression to thin edges to one-pixel width. (4) Apply double thresholding (high and low) to classify strong, weak, and non-edges. (5) Track edges by hysteresis: retain weak edges only if connected to a strong edge.",
+    "topic": "Canny edge detector — five steps",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 12,
+    "question": "How does Otsu's method determine the optimal threshold for image segmentation?",
+    "ground_truth": "Otsu's method finds the threshold T* that maximizes the between-class variance σ²_B(T) = ω₁ω₂(μ₁−μ₂)², where ω₁, ω₂ are the class probabilities and μ₁, μ₂ are the class means for pixels below and above T. This is equivalent to minimizing the total within-class variance and requires no prior knowledge of the image.",
+    "topic": "Image segmentation — thresholding (Otsu's method)",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 13,
+    "question": "How does JPEG compression use DCT and quantization?",
+    "ground_truth": "JPEG divides the image into 8×8 blocks and applies the 2D DCT to each, transforming spatial pixel values into frequency coefficients. The coefficients are then divided element-wise by a quantization matrix (uniform quantization with step sizes larger for high frequencies), and rounded to integers—discarding visually less important high-frequency information. The quantized coefficients are finally entropy-coded (Huffman or arithmetic).",
+    "topic": "JPEG compression — DCT and quantization",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 14,
+    "question": "What is the probability density function of the Gaussian noise model in images?",
+    "ground_truth": "Gaussian noise has the probability density function p(z) = (1/(√(2π)σ)) * e^{-(z-μ)²/(2σ²)}, where z is the intensity value, μ is the mean (average noise level), and σ is the standard deviation (noise strength). It is the most common noise model in electronic sensors and is fully characterized by its mean and variance.",
+    "topic": "Gaussian noise model — probability density function",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 15,
+    "question": "How is bilinear interpolation used for geometric image resampling?",
+    "ground_truth": "Bilinear interpolation estimates a pixel value at a non-integer location (x,y) using the four nearest integer-grid neighbors. The value is computed as a weighted average: v(x,y) = (1-a)(1-b)v(0,0) + a(1-b)v(1,0) + (1-a)b·v(0,1) + ab·v(1,1), where a and b are fractional distances from the top-left neighbor. It produces smoother results than nearest-neighbor interpolation with less blurring than bicubic.",
+    "topic": "Geometric transformation — bilinear interpolation for image resampling",
+    "expected_source": "Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
+    "is_off_topic": false
+  },
+  {
+    "id": 16,
+    "question": "What is the boiling point of water?",
+    "ground_truth": "Water boils at 100 degrees Celsius (212 degrees Fahrenheit) at standard atmospheric pressure (1 atm).",
+    "topic": "Off-topic — chemistry",
+    "expected_source": "N/A",
+    "is_off_topic": true
+  },
+  {
+    "id": 17,
+    "question": "Explain the rules of chess.",
+    "ground_truth": "Chess is a two-player strategy game where each player controls 16 pieces on an 8x8 board, aiming to checkmate the opponent's king.",
+    "topic": "Off-topic — games",
+    "expected_source": "N/A",
+    "is_off_topic": true
+  },
+  {
+    "id": 18,
+    "question": "How do I make pasta  bechamel in the best way?",
+    "ground_truth": "Pasta bechamel is made with boiled pasta with a creamy white sauce (prepared by whisking melted butter, flour,eggs,cooking cream, mix cheese (chedder and Mozzarella) and milk until thickened), mixing in browned meat , topping with more sauce and cheese, and baking until bubbly",
+    "topic": "Off-topic — cooking",
+    "expected_source": "N/A",
+    "is_off_topic": true
+  }
+]

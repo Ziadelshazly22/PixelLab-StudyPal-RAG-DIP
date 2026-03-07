@@ -12,7 +12,7 @@ Start-up sequence
 4. Mount the Gradio UI              /ui  (separate process: python app/ui/interface.py)
 
 Run:
-    .venv\\Scripts\\python.exe -m uvicorn main:app --reload --port 8000
+    .venv\\Scripts\\python.exe -m uvicorn main:app --port 8000
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from langserve import add_routes
 from pydantic import BaseModel
 
 from app.api.router import router as api_router
@@ -66,9 +65,24 @@ async def lifespan(app: FastAPI):
     """
     FastAPI lifespan handler — runs on server startup and shutdown.
 
-    Startup: Log which LLM backend is active (Gemini or Ollama).
-    Shutdown: (reserved for cleanup if needed)
+    Startup:
+        1. Pre-warm the embedding model and vectorstore so lru_cache is
+           populated before the first request arrives.  This eliminates the
+           8-15 second cold-load penalty on the first /chat call.
+        2. Log which LLM backend is active.
+    Shutdown: Log and clean up.
     """
+    # Pre-warm embedding model + vectorstore (populates lru_cache once,
+    # at startup, so every subsequent request is served from cache).
+    try:
+        from app.ingestion.pipeline import get_embedding_model, load_vectorstore
+        logger.info("⏳ Pre-warming embedding model and vectorstore...")
+        get_embedding_model(use_google=False)   # loads all-MiniLM-L6-v2 once
+        load_vectorstore()                       # opens ChromaDB once
+        logger.info("✅ Embedding model and vectorstore ready.")
+    except Exception as _warm_err:  # noqa: BLE001
+        logger.warning(f"Warm-up skipped (vectorstore may not exist yet): {_warm_err}")
+
     llm_backend = os.getenv("LLM_BACKEND", "gemini")
     logger.info(f"🚀 Server ready. LLM backend: {llm_backend.upper()}")
     yield
@@ -130,9 +144,29 @@ app.add_middleware(
 app.include_router(api_router)
 
 # ---------------------------------------------------------------------------
-# LangServe RAG chain route
+# Stateless RAG chain route  (replaces LangServe — same input/output schema)
+# POST /chain/rag/invoke  { "input": "<question>" }  →  { "output": "<answer>" }
 # ---------------------------------------------------------------------------
-add_routes(app, build_rag_chain(), path="/chain/rag")
+class _ChainRequest(BaseModel):
+    input: str
+
+
+@app.post("/chain/rag/invoke", tags=["rag"])
+async def chain_rag_invoke(body: _ChainRequest) -> dict:
+    """Stateless RAG chain — same interface as the old LangServe endpoint."""
+    loop = asyncio.get_running_loop()
+    try:
+        chain = build_rag_chain()
+        result = await loop.run_in_executor(None, chain.invoke, body.input)
+    except Exception as exc:  # noqa: BLE001
+        if _is_quota_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail="LLM quota/rate limit reached. Please retry later.",
+            ) from exc
+        logger.error("/chain/rag/invoke failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Chain invocation failed.") from exc
+    return {"output": result}
 
 
 # ---------------------------------------------------------------------------
@@ -275,5 +309,5 @@ except Exception as _ui_err:  # noqa: BLE001
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
 

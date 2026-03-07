@@ -72,8 +72,7 @@ MANDATORY RULES — Follow these strictly on every response:
 1. STRICT SCOPE & POLITE REJECTION: 
    Only answer questions related to Digital Image Processing or the listed libraries or studying them. 
    If a question is off-topic, respond warmly but firmly: 
-   "While I'd love to always help,but this question falls is out of focus, Let's avoid distractions and  get back to pixels 
-   & matrices!"
+   "While I'd love to always help, but this question falls out of focus. Let's avoid distractions and get back to pixels & matrices!"
 
 2. RIGOROUS CITATIONS: 
    Every factual claim, equation, or core concept MUST be cited using the provided 
@@ -214,11 +213,32 @@ def get_llm() -> BaseLanguageModel:
         if not api_key:
             raise RuntimeError("GOOGLE_API_KEY not set but LLM_BACKEND=gemini")
 
-        logger.info("Using Gemini 2.0 Flash as primary LLM (free tier, demo/dev environment)")
+        model_name = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+        logger.info("Using %s as primary LLM (free tier, demo/dev environment)", model_name)
         return ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
+            model=model_name,
             api_key=api_key,  # langchain-google-genai 4.x expects plain str
             temperature=0.2,
+            max_retries=0,    # fail fast on quota errors — no retry storm
+        )
+
+    elif backend == "groq":
+        from langchain_groq import ChatGroq
+
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise RuntimeError("GROQ_API_KEY not set but LLM_BACKEND=groq")
+
+        groq_model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+        logger.info(
+            "Using Groq (%s) as primary LLM (free tier, no billing required)",
+            groq_model,
+        )
+        return ChatGroq(
+            model=groq_model,
+            api_key=groq_api_key,
+            temperature=0.2,
+            max_retries=0,
         )
 
     elif backend == "ollama":
@@ -408,7 +428,7 @@ def run_chain(session_id: str, question: str) -> dict:
         >>> print(result["sources"])
     """
     chain = get_or_create_chain(session_id)
-    result = chain({"question": question})
+    result = chain.invoke({"question": question})
     sources = [
         {
             "source": doc.metadata.get("source", "unknown"),

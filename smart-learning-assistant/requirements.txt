@@ -12,6 +12,8 @@ fastapi
 uvicorn[standard]
 sse-starlette                  # server-sent events for streaming
 pydantic
+# NOTE: langserve removed — incompatible with langchain-core 1.x (pydantic v1/v2 conflict)
+# The /chain/rag/invoke endpoint is now a plain FastAPI route in main.py
 
 # ── UI ──────────────────────────────────────────────────────────────────────
 gradio
@@ -19,6 +21,7 @@ gradio
 # ── LLM / embeddings ────────────────────────────────────────────────────────
 google-generativeai            # Gemini REST SDK
 sentence-transformers          # all-MiniLM-L6-v2 fallback embedder
+langchain-groq                 # Groq free-tier LLM (llama-3.3-70b) — no billing required
 
 # Remember  to Install Ollama (for the DeepSeek Deployment on University's Server)
 # from https://ollama.com and run `ollama pull deepseek-r1` in a separate terminal

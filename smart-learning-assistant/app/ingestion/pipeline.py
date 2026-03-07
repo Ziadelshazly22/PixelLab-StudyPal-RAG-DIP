@@ -51,6 +51,7 @@ local / university server (CLI), with only ``CHROMA_PERSIST_DIR`` and
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import time
@@ -292,8 +293,12 @@ def chunk_documents(pages: list[dict]) -> list[Document]:
 # ---------------------------------------------------------------------------
 # SECTION 3 — Embedding model
 # ---------------------------------------------------------------------------
+@functools.lru_cache(maxsize=4)
 def get_embedding_model(use_google: bool = True):
     """Return the active embedding model (Google primary, HuggingFace fallback).
+
+    Results are cached per (use_google,) so the SentenceTransformer weights are
+    loaded exactly once per process — subsequent calls return the same instance.
 
     Strategy
     --------
@@ -692,8 +697,12 @@ def _detect_collection_dim(db_path: str, collection_name: str = _COLLECTION_NAME
         return None
 
 
+@functools.lru_cache(maxsize=2)
 def load_vectorstore(persist_dir: str | None = None):
     """Return the existing Chroma vector store for retrieval-time use.
+
+    Result is cached per persist_dir — the Chroma client is opened once and
+    reused for every subsequent retrieval call in the same process.
 
     This is a lightweight helper called by :mod:`app.retrieval.retriever`,
     :mod:`app.summarization.summarizer`, and :mod:`app.evaluation.metrics`.
