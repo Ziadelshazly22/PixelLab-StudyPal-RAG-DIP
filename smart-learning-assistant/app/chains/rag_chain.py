@@ -419,8 +419,11 @@ def run_chain(session_id: str, question: str) -> dict:
         dict with keys:
             ``answer``     (str)  — LLM response with citations.
             ``session_id`` (str)  — echoed back for client tracking.
-            ``sources``    (list) — list of ``{"source": str, "page": int/str}``
-                                    dicts from retrieved documents.
+            ``sources``    (list) — list of ``{"source": str, "page": int/str,
+                                    "page_content": str}`` dicts from retrieved
+                                    documents. ``page_content`` is the raw chunk
+                                    text; included so the evaluation pipeline
+                                    can pass real context strings to RAGAS.
 
     Example:
         >>> result = run_chain("abc-123", "What is the Sobel operator?")
@@ -429,12 +432,14 @@ def run_chain(session_id: str, question: str) -> dict:
     """
     chain = get_or_create_chain(session_id)
     result = chain.invoke({"question": question})
+    source_docs = result.get("source_documents", [])
     sources = [
         {
             "source": doc.metadata.get("source", "unknown"),
             "page": doc.metadata.get("page", "?"),
+            "page_content": doc.page_content,  # included for RAGAS context evaluation
         }
-        for doc in result.get("source_documents", [])
+        for doc in source_docs
     ]
     return {
         "answer": result.get("answer", ""),

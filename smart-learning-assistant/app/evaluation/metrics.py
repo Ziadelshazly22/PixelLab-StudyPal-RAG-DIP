@@ -215,7 +215,15 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
                 data = resp.json()
                 answer = data.get("answer", "")
                 raw_sources: list[Any] = data.get("sources", [])
-                contexts = [str(s).split("/")[-1].split("\\")[-1] for s in raw_sources]
+                # Extract actual page_content (added to /chat response for RAGAS).
+                # Fall back to source filename only when page_content is absent
+                # (e.g. older server version that hasn't been restarted yet).
+                contexts = [
+                    s.get("page_content") or s.get("source", "")
+                    if isinstance(s, dict)
+                    else str(s)
+                    for s in raw_sources
+                ]
         except requests.exceptions.ConnectionError:
             logger.error("  Connection refused — is FastAPI running on %s?", _BACKEND_URL)
             answer = ""
