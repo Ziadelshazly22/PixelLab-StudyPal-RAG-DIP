@@ -20,7 +20,6 @@ generate_study_questions(source_filename, n)
 from __future__ import annotations
 
 import logging
-import os
 import re
 
 from dotenv import load_dotenv
@@ -36,30 +35,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MAP_TEMPLATE = """\
-You are summarizing a section of a Digital Image Processing textbook.
-Preserve: key concepts, algorithm names, mathematical formulas (LaTeX notation),
-and any cited theorems. Be concise but technically precise.
+You are summarising a section of a Digital Image Processing textbook.
+Preserve: key concepts, algorithm names, mathematical formulas (LaTeX), and any cited theorems.
+Be concise but technically precise:
 
-SECTION TEXT:
-{text}
-
-CONCISE TECHNICAL SUMMARY:"""
+{text}"""
 
 _COMBINE_TEMPLATE = """\
-You are a DIP expert creating a comprehensive study-guide chapter summary
-from individual section summaries. Organise your output under these exact headings:
+You are a DIP expert creating a comprehensive study guide chapter summary from individual section summaries.
+Organise by: (1) Core Concepts, (2) Key Algorithms & Formulas,
+(3) Practical Applications, (4) Common Exam Topics.
+Maintain all LaTeX notation:
 
-### 1. Core Concepts
-### 2. Key Algorithms & Formulas
-### 3. Practical Applications
-### 4. Common Exam Topics
-
-Maintain all LaTeX notation. Be thorough but avoid repetition.
-
-SECTION SUMMARIES:
-{text}
-
-COMPREHENSIVE CHAPTER SUMMARY:"""
+{text}"""
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +79,15 @@ def get_source_chunks(source_filename: str) -> list[Document]:
 
     vs = load_vectorstore()
 
-    # Primary: metadata filter via .get() — no embedding call needed
+    # Primary path requested by spec: similarity_search with empty query + metadata filter.
     try:
+        docs = vs.similarity_search("", k=500, filter={"source": source_filename})
+    except Exception as exc:
+        logger.warning(
+            "similarity_search retrieval failed (%s); falling back to metadata get().", exc
+        )
+
+        # Fallback path: retrieve by metadata where-clause directly.
         raw = vs._collection.get(
             where={"source": source_filename},
             limit=500,
@@ -103,14 +98,19 @@ def get_source_chunks(source_filename: str) -> list[Document]:
             for text, meta in zip(raw["documents"], raw["metadatas"])
             if text and text.strip()
         ]
-    except Exception as exc:
-        logger.warning(
-            "Metadata-filter retrieval failed (%s); falling back to similarity search.", exc
+
+    # Some Chroma versions return empty results for empty-query similarity search.
+    if not docs:
+        raw = vs._collection.get(
+            where={"source": source_filename},
+            limit=500,
+            include=["documents", "metadatas"],
         )
-        # Fallback: similarity search with source filter
-        docs = vs.similarity_search(
-            "", k=500, filter={"source": source_filename}
-        )
+        docs = [
+            Document(page_content=text, metadata=meta)
+            for text, meta in zip(raw["documents"], raw["metadatas"])
+            if text and text.strip()
+        ]
 
     if not docs:
         raise ValueError(

@@ -220,7 +220,6 @@ def get_llm() -> BaseLanguageModel:
             model="gemini-2.0-flash",
             api_key=SecretStr(api_key),
             temperature=0.2,
-            convert_system_message_to_human=True,
         )
 
     elif backend == "ollama":

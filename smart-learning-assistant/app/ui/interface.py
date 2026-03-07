@@ -7,7 +7,7 @@ Gradio Blocks chat interface for the DIP AI Tutor.
 Layout
 ------
 Two tabs:
-  1. 💬 Chat   — RAG Q&A via POST /chain/rag/invoke
+    1. 💬 Chat   — stateful RAG Q&A via POST /chat
   2. 📄 Upload — PDF ingestion via POST /ingest + status via GET /status
 
 The UI always calls the FastAPI backend at http://localhost:8000.
@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 # Backend configuration
 # ---------------------------------------------------------------------------
 _BACKEND = "http://localhost:8000"
-_RAG_INVOKE_URL = f"{_BACKEND}/chain/rag/invoke"
 _CHAT_URL = f"{_BACKEND}/chat"
 _SUMMARIZE_URL = f"{_BACKEND}/summarize"
 _INGEST_URL = f"{_BACKEND}/ingest"
@@ -62,45 +61,6 @@ def _format_citations(text: str) -> str:
         r"**📖 [Source: \1, Page \2]**",
         text,
     )
-
-
-# ---------------------------------------------------------------------------
-# Helper: call RAG chain
-# ---------------------------------------------------------------------------
-
-def _call_rag_chain(question: str) -> str:
-    """
-    POST to ``/chain/rag/invoke`` and return the answer string.
-
-    Handles:
-    - ``ConnectionError`` → backend offline message
-    - ``Timeout``         → timeout message
-    - HTTP errors         → status code + truncated body
-    - Unexpected errors   → generic message with exc string
-    """
-    payload = {"input": {"question": question}}
-    try:
-        resp = requests.post(_RAG_INVOKE_URL, json=payload, timeout=_CHAT_TIMEOUT)
-        resp.raise_for_status()
-        answer = resp.json().get("output", "")
-        return _format_citations(answer)
-
-    except requests.exceptions.ConnectionError:
-        return (
-            "⚠️ Cannot reach the backend server. "
-            "Please ensure FastAPI is running on port 8000."
-        )
-    except requests.exceptions.Timeout:
-        return (
-            "⚠️ Response timed out. The server may be processing a "
-            "large context. Please try again."
-        )
-    except requests.exceptions.HTTPError as exc:
-        body = exc.response.text[:300] if exc.response is not None else str(exc)
-        return f"❌ Server error ({exc.response.status_code}): {body}"
-    except Exception as exc:
-        logger.error("Unexpected error calling RAG chain: %s", exc, exc_info=True)
-        return f"❌ Unexpected error: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +121,11 @@ def _call_chat_api(question: str, session_id: str) -> str:
 # Helper: call summarize API
 # ---------------------------------------------------------------------------
 
-def _call_summarize(source: str, n_questions: int) -> tuple:
+def _call_summarize(
+    source: str,
+    n_questions: int,
+    progress: gr.Progress = gr.Progress(track_tqdm=False),
+) -> tuple:
     """
     POST to ``/summarize`` and return ``(summary_markdown, questions_data)``.
 
@@ -173,14 +137,15 @@ def _call_summarize(source: str, n_questions: int) -> tuple:
         Tuple of ``(summary_str, [[question], ...])`` suitable for
         ``gr.Markdown`` and ``gr.Dataframe`` outputs respectively.
     """
-    if not source.strip():
+    if not source or not str(source).strip():
         return "⚠️ Please enter a document filename.", []
 
     payload = {
-        "source": source.strip(),
+        "source": str(source).strip(),
         "include_questions": True,
         "n_questions": int(n_questions),
     }
+    progress(0.05, desc="Preparing summarize request...")
     try:
         resp = requests.post(
             _SUMMARIZE_URL,
@@ -192,6 +157,8 @@ def _call_summarize(source: str, n_questions: int) -> tuple:
         summary_md = data.get("summary", "⚠️ No summary returned.")
         questions = data.get("study_questions", [])
         questions_data = [[q] for q in questions] if questions else []
+        progress(0.75, desc="Received summarize response. Parsing output...")
+        progress(1.0, desc="Done")
         return summary_md, questions_data
 
     except requests.exceptions.ConnectionError:
@@ -230,6 +197,20 @@ def _fetch_status() -> str:
         return "⚠️ Backend offline — start the FastAPI server to see live status."
     except Exception as exc:
         return f"⚠️ Could not fetch status: {exc}"
+
+
+def _fetch_status_and_sources() -> tuple[str, dict]:
+    """Return ``(status_markdown, dropdown_update)`` from ``GET /status``."""
+    status_md = _fetch_status()
+    try:
+        resp = requests.get(_STATUS_URL, timeout=5)
+        resp.raise_for_status()
+        d = resp.json()
+        sources = d.get("sources", [])
+        source_choices = [s for s in sources if isinstance(s, str) and s.strip()]
+        return status_md, gr.update(choices=sorted(set(source_choices)))
+    except Exception:
+        return status_md, gr.update(choices=[])
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +348,7 @@ def build_interface(rag_chain=None) -> gr.Blocks:
 
                 with gr.Row():
                     send_btn = gr.Button("Send", variant="primary")
-                    clear_btn = gr.Button("Clear")
+                    clear_btn = gr.Button("🗑️ Clear Conversation")
 
                 with gr.Accordion("💡 Example Questions", open=False):
                     _EXAMPLES = [
@@ -440,11 +421,6 @@ def build_interface(rag_chain=None) -> gr.Blocks:
                     inputs=[file_upload],
                     outputs=[ingestion_status],
                 )
-                refresh_btn.click(
-                    fn=_fetch_status,
-                    inputs=[],
-                    outputs=[status_display],
-                )
                 # ── Summarize Document section ──────────────────────────────────
                 gr.Markdown("---")
                 gr.Markdown(
@@ -453,11 +429,11 @@ def build_interface(rag_chain=None) -> gr.Blocks:
                     "for any ingested PDF."
                 )
 
-                summarize_filename = gr.Textbox(
-                    placeholder=(
-                        "e.g. Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf"
-                    ),
-                    label="Document filename (as stored in knowledge base)",
+                summarize_filename = gr.Dropdown(
+                    choices=[],
+                    allow_custom_value=True,
+                    label="Document filename (select from KB or type manually)",
+                    info="Examples: Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf",
                 )
 
                 n_questions_slider = gr.Slider(
@@ -473,6 +449,13 @@ def build_interface(rag_chain=None) -> gr.Blocks:
                     variant="secondary",
                 )
 
+                gr.Markdown(
+                    "_⏳ Generating summary... this may take 1\u20133 minutes. "
+                    "Please wait and do not close the page._",
+                    visible=False,
+                    elem_id="summarize-info",
+                )
+
                 summary_output = gr.Markdown(
                     value="",
                     label="📄 Document Summary",
@@ -485,17 +468,30 @@ def build_interface(rag_chain=None) -> gr.Blocks:
                     wrap=True,
                 )
 
-                # ── Summarize event ─────────────────────────────────────────
+                refresh_btn.click(
+                    fn=_fetch_status_and_sources,
+                    inputs=[],
+                    outputs=[status_display, summarize_filename],
+                )
+
                 summarize_btn.click(
+                    fn=lambda: (
+                        "⏳ Generating summary\u2026 this may take 1\u20133 minutes. Please wait.",
+                        [],
+                    ),
+                    inputs=[],
+                    outputs=[summary_output, questions_output],
+                    queue=False,
+                ).then(
                     fn=_call_summarize,
                     inputs=[summarize_filename, n_questions_slider],
                     outputs=[summary_output, questions_output],
                 )
         # ── On page load: populate top status bar ───────────────────────
         demo.load(
-            fn=_fetch_status,
+            fn=_fetch_status_and_sources,
             inputs=[],
-            outputs=[status_bar],
+            outputs=[status_bar, summarize_filename],
         )
 
     return demo

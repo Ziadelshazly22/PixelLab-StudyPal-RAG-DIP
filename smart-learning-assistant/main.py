@@ -33,9 +33,9 @@ logging.basicConfig(
 )
 
 import asyncio
-import concurrent.futures
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langserve import add_routes
 from pydantic import BaseModel
@@ -45,6 +45,17 @@ from app.chains.rag_chain import build_rag_chain, run_chain, clear_session
 from app.summarization.summarizer import summarize_document, generate_study_questions
 
 logger = logging.getLogger(__name__)
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    """Heuristic checker for provider quota/rate-limit errors."""
+    text = str(exc).lower()
+    return (
+        "resourceexhausted" in text
+        or "quota" in text
+        or "rate limit" in text
+        or "429" in text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +91,26 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc):  # noqa: ANN001
+    """Convert provider quota/rate-limit failures into user-friendly 503s."""
+    if _is_quota_error(exc):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "LLM quota/rate limit reached. Please retry later or switch backend "
+                    "to Ollama for local inference."
+                )
+            },
+        )
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error."},
+    )
 
 # ---------------------------------------------------------------------------
 # CORS – allow all origins during development; tighten in production
@@ -145,11 +176,25 @@ async def chat(body: _ChatRequest) -> dict:
 
     Returns ``{"answer": str, "session_id": str, "sources": list}``.
     """
-    loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor() as pool:
+    loop = asyncio.get_running_loop()
+    try:
         result = await loop.run_in_executor(
-            pool, run_chain, body.session_id, body.question
+            None, run_chain, body.session_id, body.question
         )
+    except Exception as exc:  # noqa: BLE001
+        if _is_quota_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "LLM quota/rate limit reached. Please retry later or switch backend "
+                    "to Ollama."
+                ),
+            ) from exc
+        logger.error("/chat failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Chat request failed due to an internal processing error.",
+        ) from exc
     return result
 
 
@@ -171,19 +216,17 @@ async def summarize(body: _SummarizeRequest) -> dict:
     Returns ``{"summary": str, "study_questions": list[str], "source": str}``.
     Raises HTTP 503 if the operation exceeds 120 s.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = loop.run_in_executor(pool, summarize_document, body.source)
-            summary: str = await asyncio.wait_for(future, timeout=120.0)
+        summary_future = loop.run_in_executor(None, summarize_document, body.source)
+        summary: str = await asyncio.wait_for(summary_future, timeout=120.0)
 
         questions: list[str] = []
         if body.include_questions:
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = loop.run_in_executor(
-                    pool, generate_study_questions, body.source, body.n_questions
-                )
-                questions = await asyncio.wait_for(future, timeout=60.0)
+            questions_future = loop.run_in_executor(
+                None, generate_study_questions, body.source, body.n_questions
+            )
+            questions = await asyncio.wait_for(questions_future, timeout=60.0)
 
     except asyncio.TimeoutError:
         raise HTTPException(
@@ -193,6 +236,20 @@ async def summarize(body: _SummarizeRequest) -> dict:
                 "The document may be too large — try again or increase the timeout."
             ),
         )
+    except Exception as exc:  # noqa: BLE001
+        if _is_quota_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "LLM quota/rate limit reached during summarisation. "
+                    "Please retry later or switch backend to Ollama."
+                ),
+            ) from exc
+        logger.error("/summarize failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Summarisation failed due to an internal processing error.",
+        ) from exc
 
     return {"summary": summary, "study_questions": questions, "source": body.source}
 

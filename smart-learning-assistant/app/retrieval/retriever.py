@@ -26,6 +26,7 @@ import logging
 from typing import Callable
 
 from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 from langchain_core.vectorstores import VectorStoreRetriever
 
 from app.ingestion.pipeline import load_vectorstore
@@ -33,7 +34,14 @@ from app.ingestion.pipeline import load_vectorstore
 logger = logging.getLogger(__name__)
 
 
-def get_retriever(k: int = 5, fetch_k: int = 20) -> VectorStoreRetriever:
+class _EmptyRetriever(BaseRetriever):
+    """Fallback retriever that always returns no documents."""
+
+    def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:  # noqa: ARG002
+        return []
+
+
+def get_retriever(k: int = 5, fetch_k: int = 20) -> BaseRetriever:
     """
     Build a Maximal Marginal Relevance (MMR) retriever over ChromaDB.
 
@@ -75,7 +83,14 @@ def get_retriever(k: int = 5, fetch_k: int = 20) -> VectorStoreRetriever:
     >>> docs = retriever.invoke("What is histogram equalization?")
     >>> print(f"Retrieved {len(docs)} documents")
     """
-    vectorstore = load_vectorstore()
+    try:
+        vectorstore = load_vectorstore()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Vectorstore load failed (%s). Falling back to empty retriever.",
+            exc,
+        )
+        return _EmptyRetriever()
 
     # Attempt MMR; fall back to similarity if older LangChain version.
     try:
@@ -96,6 +111,12 @@ def get_retriever(k: int = 5, fetch_k: int = 20) -> VectorStoreRetriever:
             search_type="similarity",
             search_kwargs={"k": k},
         )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Retriever initialization failed (%s). Falling back to empty retriever.",
+            exc,
+        )
+        return _EmptyRetriever()
 
     return retriever
 
