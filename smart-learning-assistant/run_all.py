@@ -34,6 +34,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Force UTF-8 I/O in any child process we spawn (needed on Windows cp1252 terminals
+# where validate_setup.py's ✅/❌ emoji otherwise triggers UnicodeEncodeError).
+_CHILD_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -44,7 +48,10 @@ _TESTS_DIR = _ROOT / "tests"
 _CHROMA_DIR = Path(
     os.getenv("CHROMA_PERSIST_DIR", str(_ROOT / "data" / "chroma_db"))
 )
-_EVAL_REPORT = _REPO_ROOT / "evaluation_report.md"
+# The committed evaluation report lives inside smart-learning-assistant/.
+# The data/ copy is the live-generated version from the Colab notebook.
+_EVAL_REPORT = _ROOT / "evaluation_report.md"
+_EVAL_REPORT_DATA = _ROOT / "data" / "evaluation_report.md"
 _README = _REPO_ROOT / "README.md"
 
 # ---------------------------------------------------------------------------
@@ -95,6 +102,8 @@ def check_environment() -> bool:
         [sys.executable, str(_VALIDATE), "--skip-api"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=_CHILD_ENV,
     )
     ok = result.returncode == 0
     if not ok:
@@ -113,6 +122,8 @@ def check_tests() -> bool:
         [sys.executable, "-m", "pytest", str(_TESTS_DIR), "-v", "--tb=short", "-q"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=_CHILD_ENV,
         cwd=str(_ROOT),
     )
     output = result.stdout + result.stderr
@@ -168,15 +179,23 @@ def check_chromadb() -> bool:
 def check_eval_report() -> bool:
     print(_cyan("\n[4/5] Checking evaluation report..."))
 
-    if not _EVAL_REPORT.exists():
+    # Check committed copy first, then the live-generated data/ copy.
+    report_path = None
+    for candidate in (_EVAL_REPORT, _EVAL_REPORT_DATA):
+        if candidate.exists():
+            report_path = candidate
+            break
+
+    if report_path is None:
         return _record(
             False,
             "evaluation_report.md present",
-            f"File not found: {_EVAL_REPORT}\n"
-            "Run the evaluation notebook to generate it.",
+            f"Not found at {_EVAL_REPORT} or {_EVAL_REPORT_DATA}\n"
+            "Run:  python app/evaluation/metrics.py --phase collect\n"
+            "Then: notebooks/evaluation_colab.ipynb (Colab) to generate Phase B scores.",
         )
 
-    content = _EVAL_REPORT.read_text(encoding="utf-8")
+    content = report_path.read_text(encoding="utf-8")
     if len(content.strip()) < 100:
         return _record(
             False,
@@ -187,7 +206,8 @@ def check_eval_report() -> bool:
     # Look for the overall RAGAS score in the file
     score_match = re.search(r"overall[^\d]*([\d.]+)", content, re.IGNORECASE)
     score_str = f" (overall={score_match.group(1)})" if score_match else ""
-    return _record(True, f"evaluation_report.md present{score_str}")
+    location_hint = " [committed]" if report_path == _EVAL_REPORT else " [data/]"
+    return _record(True, f"evaluation_report.md present{score_str}{location_hint}")
 
 
 # ---------------------------------------------------------------------------

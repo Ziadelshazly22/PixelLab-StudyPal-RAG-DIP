@@ -173,16 +173,43 @@ def _preflight_quota_check() -> bool:
 # ===========================================================================
 
 def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
-    """POST each question to the running FastAPI /chat and collect answers.
+    """POST each question to the running FastAPI ``/chat`` endpoint and collect answers.
 
-    Each DIP question uses a fresh UUID session_id so there is zero memory
-    contamination between evaluation turns. Off-topic questions are sent to
+    Each DIP question uses a fresh UUID ``session_id`` so there is zero memory
+    contamination between evaluation turns.  Off-topic questions are sent to
     the same endpoint and their answers are validated for the guardrail phrase.
+    Saves results to ``data/eval_intermediate.json`` for Phase B (RAGAS scoring).
 
-    Returns
-    -------
-    dict with keys: questions, answers, contexts, ground_truths, latencies,
-                    guardrail_results, topic_map
+    Args:
+        questions_path: Path to a JSON file containing a list of question dicts,
+            each with keys:
+            - ``"question"`` (str): The question text.
+            - ``"ground_truth"`` (str): Reference answer for RAGAS context_recall.
+            - ``"topic"`` (str): Topic label for per-topic breakdown.
+            - ``"is_off_topic"`` (bool): True for guardrail-validation questions.
+            Defaults to ``app/evaluation/test_questions.json``.
+
+    Returns:
+        dict with keys:
+            ``"questions"``         — list[str] of DIP question texts.
+            ``"answers"``           — list[str] of LLM answers.
+            ``"contexts"``          — list[list[str]] of retrieved chunk texts.
+            ``"ground_truths"``     — list[str] of reference answers.
+            ``"latencies"``         — list[float] per-question latency in seconds.
+            ``"topic_map"``         — list[str] topic labels matching each question.
+            ``"guardrail_results"`` — list[dict] per off-topic question with keys
+                                      ``question``, ``answer``, ``passed``, ``status``,
+                                      ``latency``.
+            ``"collected_at"``      — ISO 8601 UTC timestamp string.
+
+    Raises:
+        FileNotFoundError: If *questions_path* does not exist.
+        SystemExit(1): If the pre-flight quota check detects a blocked API key.
+
+    Example:
+        >>> data = collect_answers()
+        >>> print(f"Answered {len(data['answers'])} questions")
+        >>> print(f"Guardrail pass rate: {sum(g['passed'] for g in data['guardrail_results'])}/3")
     """
     questions_path = Path(questions_path)
     if not questions_path.exists():
@@ -484,7 +511,40 @@ def generate_report(
     guardrail_results: list[dict],
     topic_map: list[str] | None = None,
 ) -> str:
-    """Generate evaluation_report.md and return the markdown string."""
+    """Generate a Markdown evaluation report and write it to ``evaluation_report.md``.
+
+    Sections written:
+    - **Overall RAGAS Scores** — mean score per metric vs target 0.7 with ✅/❌.
+    - **Per-Topic Breakdown** — faithfulness and answer_relevancy per topic.
+    - **Latency Analysis** — mean, p50, p95 with 5.0s SLA flag.
+    - **Guardrail Test Results** — pass/fail per off-topic question.
+    - **Failed Cases** — any question where any metric falls below 0.7.
+    - **Recommendations** — actionable next steps for metrics below target.
+
+    Args:
+        ragas_df: ``pandas.DataFrame`` returned by :func:`run_ragas_scoring`.
+            Expected columns: ``question``, ``faithfulness``,
+            ``answer_relevancy``, ``context_precision``, ``context_recall``.
+        latencies: Per-question latency floats (seconds) from Phase A.
+        guardrail_results: List of dicts from ``collect_answers``, each with
+            ``question``, ``answer``, ``passed`` (bool|None), ``status`` (str).
+        topic_map: Optional list of topic label strings, one per DIP question.
+            Used for the per-topic breakdown table.
+
+    Returns:
+        Markdown string of the full report. The same string is written to
+        ``evaluation_report.md`` in the project root.
+
+    Raises:
+        OSError: If the report file cannot be written (permissions, disk full).
+
+    Example:
+        >>> import pandas as pd
+        >>> df = pd.DataFrame({"faithfulness": [0.8], "answer_relevancy": [0.9],
+        ...                    "context_precision": [0.95], "context_recall": [0.75]})
+        >>> report = generate_report(df, latencies=[2.1], guardrail_results=[])
+        >>> assert "## Overall RAGAS Scores" in report
+    """
     import numpy as np
 
     metrics = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]

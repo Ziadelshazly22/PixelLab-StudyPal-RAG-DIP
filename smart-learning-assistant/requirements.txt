@@ -1,12 +1,10 @@
 # ── Core LangChain stack ────────────────────────────────────────────────────
 langchain                      # LangChain 1.x core (upgraded from 0.2.16)
 langchain-classic              # ConversationalRetrievalChain, ConversationBufferWindowMemory, load_summarize_chain
-langchain-google-genai         # Gemini 2.0 Flash + Google text-embedding-004
 langchain-community            # HuggingFaceEmbeddings (fallback), PyMuPDFLoader, Ollama
 langchain-huggingface          # HuggingFaceEmbeddings (modern, non-deprecated)
 langchain-chroma               # ChromaDB integration
-langchainhub                   # Hub prompt pulls (optional)
-
+langchainhub                   # Hub prompt pulls (e.g. for evaluation)
 # ── API / server ────────────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
@@ -19,13 +17,17 @@ pydantic
 gradio
 
 # ── LLM / embeddings ────────────────────────────────────────────────────────
-google-generativeai            # Gemini REST SDK
 sentence-transformers          # all-MiniLM-L6-v2 fallback embedder
 langchain-groq                 # Groq free-tier LLM (llama-3.3-70b) — no billing required
 
-# Remember  to Install Ollama (for the DeepSeek Deployment on University's Server)
-# from https://ollama.com and run `ollama pull deepseek-r1` in a separate terminal
-# — this runs in the background and takes time.don't need it until deployment.
+# ── Ollama (local LLM runtime for DeepSeek-R1-Distill-Qwen-14B) ──────────────
+# Step 1: Install Ollama from https://ollama.com
+# Step 2: Run in a separate terminal:
+#         ollama pull deepseek-r1:14b
+# Step 3: Start Ollama server:
+#         ollama serve
+langchain-ollama               # Modern Ollama integration for LangChain
+ollama                         # Ollama Python client
 
 # ── Vector store ─────────────────────────────────────────────────────────────
 chromadb

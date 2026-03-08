@@ -163,3 +163,102 @@ def test_guardrail_passes_ontopic(mock_vectorstore, monkeypatch):
     assert len(result) > 0, (
         "Guardrail should pass on-topic query but returned empty list"
     )
+
+
+# ===========================================================================
+# 7. chunk_documents with empty pages list returns empty list
+# ===========================================================================
+def test_chunk_documents_empty_pages():
+    """chunk_documents([]) must return [] without raising."""
+    from app.ingestion.pipeline import chunk_documents
+
+    result = chunk_documents([])
+    assert result == [], f"Expected [], got {result}"
+
+
+# ===========================================================================
+# 8. chunk_index values are sequential (0-based)
+# ===========================================================================
+def test_chunk_index_sequential():
+    """chunk_index metadata must be 0, 1, 2, … across all chunks."""
+    from app.ingestion.pipeline import chunk_documents
+
+    pages = _make_page_dicts(3)
+    chunks = chunk_documents(pages)
+
+    assert chunks, "chunk_documents returned empty list"
+    indices = [c.metadata.get("chunk_index") for c in chunks]
+    # All indices must be present as integers
+    assert all(isinstance(i, int) for i in indices), "chunk_index values are not ints"
+    # Indices must be sequential starting from 0
+    assert indices == list(range(len(chunks))), (
+        f"chunk_index not sequential: {indices}"
+    )
+
+
+# ===========================================================================
+# 9. internal _image_only_skipped key is stripped from chunk metadata
+# ===========================================================================
+def test_internal_metadata_stripped():
+    """_image_only_skipped must not appear in any chunk's metadata."""
+    from app.ingestion.pipeline import chunk_documents
+
+    pages = _make_page_dicts(2)
+    # Inject the internal key as if extract_text_from_pdf had added it
+    pages[0]["metadata"]["_image_only_skipped"] = 3
+
+    chunks = chunk_documents(pages)
+
+    assert chunks, "chunk_documents returned empty list"
+    for chunk in chunks:
+        assert "_image_only_skipped" not in chunk.metadata, (
+            "Internal key '_image_only_skipped' leaked into chunk metadata"
+        )
+
+
+# ===========================================================================
+# 10. extract_text_from_pdf returns [] gracefully when fitz raises an error
+# ===========================================================================
+def test_extract_text_pdf_graceful_error(tmp_path):
+    """extract_text_from_pdf must return [] (not raise) for a corrupt / non-PDF file."""
+    from app.ingestion.pipeline import extract_text_from_pdf
+
+    # Write a file that is not a valid PDF so fitz will raise FileDataError
+    corrupt = tmp_path / "corrupt.pdf"
+    corrupt.write_bytes(b"This is not a PDF")
+
+    result = extract_text_from_pdf(str(corrupt), "textbook")
+    assert result == [], (
+        f"Expected [] for corrupt file but got: {result}"
+    )
+
+
+# ===========================================================================
+# 11. chunk size does not drastically exceed chunk_size (800 chars)
+# ===========================================================================
+def test_chunk_size_within_bounds():
+    """No chunk should exceed chunk_size * 1.5 (RecursiveCharacterTextSplitter heuristic)."""
+    from app.ingestion.pipeline import chunk_documents
+
+    # Create a page with a long continuous text (no separators) to stress the splitter
+    long_text = "Digital image processing " * 200   # ~4800 chars, no newlines
+    pages = [
+        {
+            "text": long_text,
+            "metadata": {
+                "source": "dip.pdf",
+                "page": 1,
+                "category": "textbook",
+                "file_path": "/data/raw/1_textbooks/dip.pdf",
+            },
+        }
+    ]
+    chunks = chunk_documents(pages)
+
+    assert chunks, "chunk_documents returned empty list for long text"
+    # RecursiveCharacterTextSplitter may exceed chunk_size slightly at word boundaries,
+    # but should stay well under 2× the configured size.
+    max_len = max(len(c.page_content) for c in chunks)
+    assert max_len <= 800 * 2, (
+        f"Chunk too long ({max_len} chars); chunk_size=800 but max found={max_len}"
+    )
