@@ -184,8 +184,6 @@ uvicorn main:app --reload
 
 ## Environment Variables
 
-
-
 | Variable | Required | Description |
 | --- | --- | --- |
 | `GROQ_API_KEY` | ✅ | Groq API key — [Groq Console](https://console.groq.com/keys) |
