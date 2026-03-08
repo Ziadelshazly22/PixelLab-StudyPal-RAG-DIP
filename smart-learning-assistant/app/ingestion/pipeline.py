@@ -44,9 +44,9 @@ Usage
 Dual-environment support
 ------------------------
 All paths are configurable via environment variables — no hardcoded paths.
-This file runs identically in Google Colab (heavy ingestion) and on a
-local / university server (CLI), with only ``CHROMA_PERSIST_DIR`` and
-``GOOGLE_API_KEY`` differing between environments.
+This file runs identically in Colab (notebooks/ingestion_colab.ipynb)
+and on a local / university server (CLI), with only ``CHROMA_PERSIST_DIR``
+differing between environments.
 """
 
 from __future__ import annotations
@@ -238,8 +238,8 @@ def chunk_documents(pages: list[dict]) -> list[Document]:
     :class:`~langchain_text_splitters.RecursiveCharacterTextSplitter`
     with parameters tuned for technical / academic text:
 
-    - ``chunk_size=800`` — fits Google ``text-embedding-004``'s sweet spot
-      and keeps LaTeX formula context intact within a chunk.
+    - ``chunk_size=800`` — tuned for technical/academic text; keeps LaTeX
+      formula context intact within a chunk.
     - ``chunk_overlap=150`` — ensures sentence-boundary continuity across
       chunk borders.
     - Separator hierarchy: paragraph → newline → sentence → word → char.
@@ -293,24 +293,16 @@ def chunk_documents(pages: list[dict]) -> list[Document]:
 # ---------------------------------------------------------------------------
 # SECTION 3 — Embedding model
 # ---------------------------------------------------------------------------
-@functools.lru_cache(maxsize=4)
-def get_embedding_model(use_google: bool = True):
-    """Return the active embedding model (Google primary, HuggingFace fallback).
+@functools.lru_cache(maxsize=1)
+def get_embedding_model():
+    """Return the active embedding model (``all-MiniLM-L6-v2``, fully local).
 
-    Results are cached per (use_google,) so the SentenceTransformer weights are
-    loaded exactly once per process — subsequent calls return the same instance.
+    The SentenceTransformer weights are loaded exactly once per process —
+    subsequent calls return the cached instance from ``lru_cache``.
 
-    Strategy
-    --------
-    1. **Primary** — :class:`~langchain_google_genai.GoogleGenerativeAIEmbeddings`
-       using ``EMBEDDING_MODEL`` from ``.env`` (default ``models/text-embedding-004``).
-       Requires ``GOOGLE_API_KEY`` to be set and ``langchain-google-genai < 2.0``
-       installed (v2+ routes to the v1beta endpoint where the model is unavailable).
-    2. **Fallback** — :class:`~langchain_community.embeddings.HuggingFaceEmbeddings`
-       with ``all-MiniLM-L6-v2``.  Fully local, no API key required.
-
-    Args:
-        use_google: Set ``False`` to force the local HuggingFace fallback.
+    Uses :class:`~langchain_huggingface.HuggingFaceEmbeddings` with
+    ``all-MiniLM-L6-v2`` (384-dim).  No API key or network access required
+    after the model is cached locally by HuggingFace hub.
 
     Returns:
         A LangChain-compatible embeddings object implementing
@@ -320,22 +312,9 @@ def get_embedding_model(use_google: bool = True):
         >>> emb = get_embedding_model()
         >>> vectors = emb.embed_documents(["What is convolution?"])
         >>> len(vectors[0])
-        768
+        384
     """
-    if use_google and os.getenv("GOOGLE_API_KEY"):
-        try:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-            model = os.getenv("EMBEDDING_MODEL", "models/text-embedding-004")
-            logger.info("Using Google embeddings: %s", model)
-            return GoogleGenerativeAIEmbeddings(model=model)
-        except Exception:
-            logger.warning(
-                "Google embeddings failed — falling back to SentenceTransformers.",
-                exc_info=True,
-            )
-
-    logger.info("Using SentenceTransformers fallback: all-MiniLM-L6-v2")
+    logger.info("Using SentenceTransformers: all-MiniLM-L6-v2")
     try:
         from langchain_huggingface import HuggingFaceEmbeddings  # preferred (no deprecation)
     except ImportError:
@@ -756,21 +735,17 @@ def load_vectorstore(persist_dir: str | None = None):
 
     # Step 2: auto-select embedding model that matches the stored dimension
     stored_dim = _detect_collection_dim(db_path) if Path(db_path).exists() else None
-    if stored_dim == 384:
-        # Collection was built with all-MiniLM-L6-v2 (384-dim) — must match
+    if stored_dim and stored_dim != 384:
+        logger.warning(
+            "Collection dimension is %d, expected 384 (all-MiniLM-L6-v2). "
+            "Re-ingest with scripts/run_ingestion.py if you see dimension errors.",
+            stored_dim,
+        )
+    elif stored_dim == 384:
         logger.info(
             "Detected 384-dim collection — using all-MiniLM-L6-v2 embeddings."
         )
-        embeddings = get_embedding_model(use_google=False)
-    elif stored_dim == 768:
-        logger.info("Detected 768-dim collection — using Google text-embedding-004.")
-        embeddings = get_embedding_model(use_google=True)
-    else:
-        logger.info(
-            "Collection dimension unknown (%s) — using default embedding strategy.",
-            stored_dim,
-        )
-        embeddings = get_embedding_model()
+    embeddings = get_embedding_model()
 
     return Chroma(
         persist_directory=persist_dir,

@@ -1,71 +1,98 @@
-# ── Core LangChain stack ────────────────────────────────────────────────────
-langchain                      # LangChain 1.x core (upgraded from 0.2.16)
-langchain-classic              # ConversationalRetrievalChain, ConversationBufferWindowMemory, load_summarize_chain
-langchain-community            # HuggingFaceEmbeddings (fallback), PyMuPDFLoader, Ollama
-langchain-huggingface          # HuggingFaceEmbeddings (modern, non-deprecated)
-langchain-chroma               # ChromaDB integration
-langchainhub                   # Hub prompt pulls (e.g. for evaluation)
-# ── API / server ────────────────────────────────────────────────────────────
-fastapi
-uvicorn[standard]
-sse-starlette                  # server-sent events for streaming
-pydantic
-# NOTE: langserve removed — incompatible with langchain-core 1.x (pydantic v1/v2 conflict)
-# The /chain/rag/invoke endpoint is now a plain FastAPI route in main.py
+# =============================================================================
+# DIP AI Tutor -- Smart Learning Assistant
+# Python dependencies (tested on Python 3.12, Windows / Linux)
+# =============================================================================
+# Install: pip install -r requirements.txt
+# All packages below are actively imported by the application or test suite.
+# =============================================================================
 
-# ── UI ──────────────────────────────────────────────────────────────────────
-gradio
+# -- Core LangChain stack -----------------------------------------------------
+langchain==1.2.10
+langchain-classic==1.0.2
+    # ConversationalRetrievalChain, ConversationBufferWindowMemory,
+    # load_summarize_chain  (app/chains/rag_chain.py, app/summarization/summarizer.py)
+langchain-community==0.4.1
+    # HuggingFaceEmbeddings (embedding fallback), ChatOllama (Ollama LLM backend)
+langchain-huggingface==1.2.1
+    # HuggingFaceEmbeddings -- modern non-deprecated import
+langchain-chroma==1.1.0
+    # Chroma vector store LangChain integration
+langchain-groq==1.1.2
+    # Groq ChatGroq -- primary LLM backend (llama-3.3-70b, free tier)
 
-# ── LLM / embeddings ────────────────────────────────────────────────────────
-sentence-transformers          # all-MiniLM-L6-v2 fallback embedder
-langchain-groq                 # Groq free-tier LLM (llama-3.3-70b) — no billing required
 
-# ── Ollama (local LLM runtime for DeepSeek-R1-Distill-Qwen-14B) ──────────────
-# Step 1: Install Ollama from https://ollama.com
-# Step 2: Run in a separate terminal:
-#         ollama pull deepseek-r1:14b
-# Step 3: Start Ollama server:
-#         ollama serve
+# -- Ollama (local LLM -- campus / offline deployment) ------------------------
+# Install Ollama:  https://ollama.com
+# Pull the model:  ollama pull deepseek-r1
+# Start server:    ollama serve
+# Set in .env:     LLM_BACKEND=ollama
+# ChatOllama is provided by langchain-community above -- no extra package needed.
 langchain-ollama               # Modern Ollama integration for LangChain
-ollama                         # Ollama Python client
+ollama                   # Local LLM server (optional -- only if using Ollama backend)
 
-# ── Vector store ─────────────────────────────────────────────────────────────
-chromadb
+# -- API / server -------------------------------------------------------------
+fastapi==0.135.1
+uvicorn[standard]==0.41.0
+pydantic==2.12.5
 
-# ── Document loading ─────────────────────────────────────────────────────────
-pymupdf                        # PyMuPDFLoader (fitz)
-pdfplumber                     # table / layout-aware PDF parsing
-python-docx                    # .docx support
+# -- UI -----------------------------------------------------------------------
+gradio==6.8.0
 
-# ── Nougat (LaTeX OCR) ───────────────────────────────────────────────────────
-nougat-OCR  # For Scientific Document OCR (LaTeX, math, tables)
+# -- Embeddings ---------------------------------------------------------------
+sentence-transformers==5.2.3
+    # Loads all-MiniLM-L6-v2 locally -- no API key required (primary embedder)
 
-# ── Image / vision ───────────────────────────────────────────────────────────
-opencv-python
-scikit-image
+# -- Vector store -------------------------------------------------------------
+chromadb==1.5.2
 
-# ── Scientific computing ─────────────────────────────────────────────────────
-numpy
-scipy
-pandas
-matplotlib
-Pillow
+# -- Document loading ---------------------------------------------------------
+pymupdf==1.27.1
+    # Primary PDF text extractor (fitz)
+pdfplumber==0.11.9
+    # Layout-aware PDF fallback for image-heavy or scanned PDFs
 
-# ── Dataset utilities ────────────────────────────────────────────────────────
-datasets                       # HuggingFace datasets (evaluation splits)
+# -- Evaluation ---------------------------------------------------------------
+ragas==0.4.3
+    # RAGAS: faithfulness / answer_relevancy / context_precision / context_recall
+datasets==4.6.1
+    # HuggingFace Dataset -- required by ragas.evaluate()
 
-# ── Environment ──────────────────────────────────────────────────────────────
-python-dotenv
+# -- Data processing ----------------------------------------------------------
+pandas==3.0.1
+    # RAGAS results DataFrame; generate_report() table construction
+numpy==1.26.4
+    # np.mean / np.percentile in generate_report()
 
-# ── Evaluation ───────────────────────────────────────────────────────────────
-ragas                          # RAGAS faithfulness / relevancy / recall metrics
-rouge-score                    # ROUGE-L for summarisation evaluation
+# -- HTTP client --------------------------------------------------------------
+requests==2.32.5
+    # Evaluation Phase A HTTP calls; Gradio UI backend calls
 
-# ── Dev / test ───────────────────────────────────────────────────────────────
-pytest
-pytest-asyncio
-tqdm
-tenacity
+# -- Environment --------------------------------------------------------------
+python-dotenv==1.2.2
+
+# -- Utilities ----------------------------------------------------------------
+tqdm==4.67.3
+    # Progress bars in ingestion and evaluation phases
+tenacity==8.5.0
+    # Retry logic for embedding API calls and summarisation chain
+
+# -- Testing ------------------------------------------------------------------
+pytest==9.0.2
+pytest-asyncio==1.3.0
+
+# =============================================================================
+# FUTURE -- uncomment when implementing REPL / visual proof features
+# (see Section 11 of Smart_Learning_Assistant_specs.txt for roadmap)
+# =============================================================================
+# opencv-python       # Image processing engine (planned: REPL code execution)
+# scikit-image        # Additional image algorithms (planned)
+# matplotlib          # Plot rendering (planned: visual proofs in chat)
+# Pillow              # PIL image I/O (planned)
+# scipy               # Signal processing algorithms (planned)
+# python-docx         # .docx ingestion support (planned)
+# nougat-OCR          # Scientific PDF math OCR / LaTeX extraction (planned)
+# rouge-score         # ROUGE-L summarisation evaluation (planned)
+
 
 
 

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / ".env")  # must run before any LangChain/Google imports
+load_dotenv(Path(__file__).resolve().parent / ".env")  # must run before any LangChain imports
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -77,13 +77,13 @@ async def lifespan(app: FastAPI):
     try:
         from app.ingestion.pipeline import get_embedding_model, load_vectorstore
         logger.info("⏳ Pre-warming embedding model and vectorstore...")
-        get_embedding_model(use_google=False)   # loads all-MiniLM-L6-v2 once
+        get_embedding_model()   # loads all-MiniLM-L6-v2 once
         load_vectorstore()                       # opens ChromaDB once
         logger.info("✅ Embedding model and vectorstore ready.")
     except Exception as _warm_err:  # noqa: BLE001
         logger.warning(f"Warm-up skipped (vectorstore may not exist yet): {_warm_err}")
 
-    llm_backend = os.getenv("LLM_BACKEND", "gemini")
+    llm_backend = os.getenv("LLM_BACKEND", "groq")
     logger.info(f"🚀 Server ready. LLM backend: {llm_backend.upper()}")
     yield
     logger.info("Server shutting down.")
@@ -209,11 +209,23 @@ async def chat(body: _ChatRequest) -> dict:
     """Conversational RAG with per-session ``ConversationalRetrievalChain``.
 
     Returns ``{"answer": str, "session_id": str, "sources": list}``.
+    Times out after 90 s and returns HTTP 503 so the client gets a clear error
+    instead of hanging indefinitely (httpx default per-call timeout is 600 s).
     """
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None, run_chain, body.session_id, body.question
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, run_chain, body.session_id, body.question),
+            timeout=90.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Request timed out after 90 s. "
+                "The LLM may be rate-limited — wait 30 s and try again, "
+                "or set LLM_BACKEND=ollama for fully local inference."
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         if _is_quota_error(exc):

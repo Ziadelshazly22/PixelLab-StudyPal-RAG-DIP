@@ -34,6 +34,7 @@ import re
 import uuid
 
 import gradio as gr
+from gradio import themes
 import requests
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ _CHAT_URL = f"{_BACKEND}/chat"
 _SUMMARIZE_URL = f"{_BACKEND}/summarize"
 _INGEST_URL = f"{_BACKEND}/ingest"
 _STATUS_URL = f"{_BACKEND}/status"
-_CHAT_TIMEOUT = 60    # seconds — Gemini can be slow on first call
+_CHAT_TIMEOUT = 120   # seconds — larger than server's 90s hard limit so server error propagates
 _INGEST_TIMEOUT = 60  # seconds — ingestion can be slow
 
 
@@ -55,7 +56,7 @@ _INGEST_TIMEOUT = 60  # seconds — ingestion can be slow
 # ---------------------------------------------------------------------------
 
 def _format_citations(text: str) -> str:
-    """Bold-emphasise ``[Source: X, Page Y]`` markers in LLM output."""
+    """Bold-emphasize ``[Source: X, Page Y]`` markers in LLM output."""
     return re.sub(
         r"\[Source:\s*([^,\]]+),\s*Page[:\s]*(\d+)\]",
         r"**📖 [Source: \1, Page \2]**",
@@ -272,13 +273,28 @@ def _handle_send(
     user_message: str,
     chat_history: list,
     session_id: str,
-) -> tuple[list, str]:
-    """Append user message + RAG answer to chat history; clear the textbox."""
-    if not user_message.strip():
-        return chat_history, user_message
+):
+    """Stream user message + RAG answer to the chatbot.
 
+    Yields an immediate '⏳ Thinking…' placeholder so the user gets visual
+    feedback within < 1 s, then replaces it with the real answer once the
+    backend returns (or an error message on timeout / quota exhaustion).
+    """
+    if not user_message.strip():
+        yield chat_history, user_message
+        return
+
+    # 1. Instant feedback — show the question + placeholder right away
+    yield (
+        chat_history + [[user_message, "⏳ *Searching knowledge base… (up to 30 s)*"]],
+        "",
+    )
+
+    # 2. Call the backend (blocks this thread; Gradio runs it in a worker)
     answer = _call_chat_api(user_message.strip(), session_id)
-    return chat_history + [[user_message, answer]], ""
+
+    # 3. Replace placeholder with the real answer
+    yield chat_history + [[user_message, answer]], ""
 
 
 def _handle_clear(session_id: str) -> tuple[list, str]:
@@ -506,12 +522,15 @@ if __name__ == "__main__":
         format="%(asctime)s | %(levelname)s | %(message)s",
         datefmt="%H:%M:%S",
     )
+    import gradio.utils as _gu
+    _gu.get_favicon_path = lambda: None  # type: ignore
     demo = build_interface()
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
         show_error=True,
-        theme=gr.themes.Soft(),
+        theme=themes.Soft(),
+        favicon_path="🤖",
         css="#status-bar{font-size:.80em;opacity:.88;padding:4px 0} .example-btn{margin:2px 0!important}",
     )

@@ -11,7 +11,7 @@ get_source_chunks(source_filename)
 
 summarize_document(source_filename)
     Map-reduce summarisation over all chunks of a document.
-    Resilient to Gemini 429 rate limits via tenacity retry.
+    Resilient to Groq rate limits via tenacity retry.
 
 generate_study_questions(source_filename, n)
     Generate *n* exam-style questions from a representative sample of the document.
@@ -133,7 +133,7 @@ def get_source_chunks(source_filename: str) -> list[Document]:
     reraise=True,
 )
 def _invoke_summarize_chain(chain, docs: list[Document]) -> str:
-    """Invoke the summarisation chain with tenacity retry on Gemini 429."""
+    """Invoke the summarisation chain with tenacity retry on Groq rate limits."""
     result = chain.invoke(docs)
     # load_summarize_chain returns either a str or {"output_text": str}
     if isinstance(result, dict):
@@ -145,10 +145,10 @@ def summarize_document(source_filename: str) -> str:
     """Generate a map-reduce academic summary for *source_filename*.
 
     Retrieves all chunks from ChromaDB, optionally samples every 3rd chunk
-    if the total text exceeds 100,000 characters (to stay within Gemini's
+    if the total text exceeds 100,000 characters (to stay within the LLM's
     context window), then runs a map-reduce summarisation chain.
 
-    Gemini 429 rate-limit errors are retried up to 3 times with exponential
+    LLM 429 rate-limit errors are retried up to 3 times with exponential
     back-off (4 s → 8 s → 60 s) via :func:`tenacity`.
 
     Args:

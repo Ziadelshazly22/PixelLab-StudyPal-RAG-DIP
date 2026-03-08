@@ -11,7 +11,7 @@ Phase A — collect_answers()  [runs LOCALLY against the running FastAPI server]
     - Validates guardrail on off-topic questions (must contain refusal phrase)
     - Saves everything to data/eval_intermediate.json
 
-Phase B — run_ragas_scoring()  [runs in GOOGLE COLAB to avoid local quota contention]
+Phase B — run_ragas_scoring()  [runs in Colab (notebooks/evaluation_colab.ipynb) to avoid local quota contention]
     - Loads data/eval_intermediate.json
     - Builds a RAGAS Dataset
     - Runs faithfulness, answer_relevancy, context_precision, context_recall
@@ -89,35 +89,6 @@ _RAGAS_TARGETS = {
     "context_recall": 0.7,
 }
 
-_DAILY_QUOTA_ID = "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
-_QUOTA_LIMIT_ZERO_MSG = (
-    "\n"
-    "=" * 70 + "\n"
-    "  QUOTA LIMIT = 0  (Google Cloud billing restriction)\n"
-    "=" * 70 + "\n"
-    "  The API key is valid but the Google Cloud project has quota limit = 0.\n"
-    "  This is NOT a usage issue — it means the free-tier quota is blocked.\n\n"
-    "  Fix (takes ~2 minutes, no charge ever):\n"
-    "  1. Go to https://console.cloud.google.com/billing\n"
-    "  2. Link a billing account to the project that owns your API key\n"
-    "     (a free account is enough — you only need to provide a card)\n"
-    "  3. Re-run this script — the free tier (200 req/day) is then unlocked\n"
-    "=" * 70
-)
-
-
-def _is_daily_quota_exhausted(response: "requests.Response") -> bool:
-    """Return True when the 503 body indicates a *daily* quota violation.
-
-    Per-minute quota is worth retrying (reset in <60 s).
-    Daily quota is NOT worth retrying — the limit resets at midnight PT.
-    """
-    try:
-        detail = response.json().get("detail", "")
-        return _DAILY_QUOTA_ID in str(detail)
-    except Exception:  # noqa: BLE001
-        return False
-
 
 def _post_chat_with_retry(payload: dict, timeout: int) -> "requests.Response":
     """POST to /chat, retrying up to _MAX_LLM_RETRIES times on transient 503s.
@@ -129,7 +100,7 @@ def _post_chat_with_retry(payload: dict, timeout: int) -> "requests.Response":
     resp: "requests.Response | None" = None
     for attempt in range(_MAX_LLM_RETRIES):
         resp = requests.post(_CHAT_URL, json=payload, timeout=timeout)
-        if resp.status_code == 503 and not _is_daily_quota_exhausted(resp):
+        if resp.status_code == 503:
             if attempt < _MAX_LLM_RETRIES - 1:
                 logger.warning(
                     "LLM rate-limited (503) on attempt %d/%d — "
@@ -154,10 +125,7 @@ def _preflight_quota_check() -> bool:
         if r.status_code == 200:
             logger.info("✅ Pre-flight passed — quota available. Starting collection.")
             return True
-        if r.status_code == 503 and _is_daily_quota_exhausted(r):
-            print(_QUOTA_LIMIT_ZERO_MSG)
-            return False
-        # Any other status (4xx/5xx not quota-related) — warn but proceed
+        # Any non-200 status — warn but proceed (transient 503s are handled by retry logic)
         logger.warning("Pre-flight got %s — proceeding anyway.", r.status_code)
         return True
     except requests.exceptions.ConnectionError:
@@ -252,14 +220,13 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
         try:
             resp = _post_chat_with_retry(payload, _CHAT_TIMEOUT)
             latency = time.time() - t0
-            if resp.status_code == 503 and _is_daily_quota_exhausted(resp):
+            if resp.status_code == 503:
                 daily_quota_hit = True
                 logger.error(
-                    "\n❌ Daily LLM quota exhausted.\n"
+                    "\n❌ LLM quota/rate-limit (503): retries exhausted.\n"
                     "   Collection aborted after %d/%d questions.\n"
-                    "   Fix: check your API key quota at https://console.groq.com "
-                    "(Groq) or https://aistudio.google.com/app/apikey (Gemini)\n"
-                    "   Then update the key in .env and restart the server.",
+                    "   Check your Groq quota at https://console.groq.com\n"
+                    "   or wait for the rate-limit window to reset.",
                     i - 1, len(dip_questions),
                 )
                 answer = ""
@@ -323,15 +290,10 @@ def collect_answers(questions_path: str | Path = _QUESTIONS_FILE) -> dict:
         try:
             resp = _post_chat_with_retry(payload, _CHAT_TIMEOUT)
             latency = time.time() - t0
-            if resp.status_code == 503 and _is_daily_quota_exhausted(resp):
-                logger.error("Daily quota exhausted during guardrail checks. Stopping.")
+            if resp.status_code == 503:
                 answer = resp.json().get("detail", "")
                 passed = None
-                status = "UNKNOWN (daily quota exhausted)"
-            elif resp.status_code == 503:
-                answer = resp.json().get("detail", "")
-                passed = None
-                status = "UNKNOWN (quota — retries exhausted)"
+                status = "UNKNOWN (LLM quota — retries exhausted)"
             else:
                 resp.raise_for_status()
                 answer = resp.json().get("answer", "")
@@ -401,8 +363,7 @@ def run_ragas_scoring(
 
     Automatically selects the judge LLM:
       1. GROQ_API_KEY set  → Groq llama-3.1-8b-instant    (free, preferred)
-      2. GOOGLE_API_KEY set → Gemini 2.0 Flash             (fallback)
-      3. Neither set        → RAGAS default (OpenAI — will error if no key)
+      2. Not set            → RAGAS default (OpenAI — will error if no key)
 
     Parameters
     ----------
@@ -410,11 +371,11 @@ def run_ragas_scoring(
         Path to the JSON file produced by Phase A (--phase collect).
     max_workers : int
         Max parallel RAGAS evaluation jobs (default 2).  Lower values avoid
-        Groq TPM/TPD rate-limit bursts.  Pass 1 for fully sequential.
+        Groq TPM rate-limit bursts.  Pass 1 for fully sequential.
     timeout : int
         Per-job timeout in seconds (default 120).
 
-    Designed for Google Colab.  Run Phase A (collect) locally first.
+    Designed for Colab (notebooks/evaluation_colab.ipynb).  Run Phase A (collect) locally first.
 
     Returns
     -------
@@ -452,7 +413,6 @@ def run_ragas_scoring(
     ragas_llm: Any = None
     ragas_emb: Any = None
     groq_key   = os.getenv("GROQ_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
 
     if groq_key:
         from langchain_groq import ChatGroq  # type: ignore
@@ -468,18 +428,9 @@ def run_ragas_scoring(
             HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         )
         logger.info("RAGAS judge: Groq llama-3.1-8b-instant (500K TPD) + all-MiniLM-L6-v2 embeddings")
-    elif google_key:
-        from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings  # type: ignore
-        ragas_llm = LangchainLLMWrapper(
-            ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=google_key, temperature=0)
-        )
-        ragas_emb = LangchainEmbeddingsWrapper(
-            GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=google_key)
-        )
-        logger.info("RAGAS judge: Gemini 2.0 Flash + text-embedding-004")
     else:
         logger.warning(
-            "No GROQ_API_KEY or GOOGLE_API_KEY found — "
+            "No GROQ_API_KEY found — "
             "RAGAS will attempt OpenAI default (will fail without OPENAI_API_KEY)."
         )
 

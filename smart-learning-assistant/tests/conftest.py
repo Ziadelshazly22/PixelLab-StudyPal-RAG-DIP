@@ -73,7 +73,7 @@ def mock_vectorstore():
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def mock_llm():
-    """Return a MagicMock that mimics a ChatGoogleGenerativeAI instance.
+    """Return a MagicMock that mimics a ChatGroq instance.
 
     .invoke() returns a message object whose .content is a plausible DIP answer.
     """

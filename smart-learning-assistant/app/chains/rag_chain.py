@@ -209,7 +209,6 @@ def get_llm() -> BaseLanguageModel:
 
     Groq ``llama-3.1-8b-instant`` is used when ``LLM_BACKEND=groq`` (default).
     DeepSeek-R1-Distill-Qwen-14B via Ollama is used when ``LLM_BACKEND=ollama``.
-    Gemini 2.0 Flash is used when ``LLM_BACKEND=gemini`` (legacy).
 
     Raises
     ------
@@ -233,30 +232,34 @@ def get_llm() -> BaseLanguageModel:
         # Gate every LLM call to stay under Groq's 6 000 TPM free-tier ceiling.
         # llama-3.1-8b-instant responses average ~600 tokens (2 calls/question).
         # 0.06 req/s × 60 = 3.6 calls/min × 600 tok ≈ 2 160 tok/min (< 6 000).
+        def _make_groq(**extra_kwargs: Any) -> "ChatGroq":  # type: ignore[name-defined]
+            return ChatGroq(
+                model=groq_model,
+                api_key=SecretStr(groq_api_key),
+                temperature=0.2,
+                max_tokens=2048,
+                max_retries=1,       # 2 total attempts; fail fast for demo
+                timeout=20.0,        # hard per-call timeout (httpx default is 600 s!)
+                **extra_kwargs,
+            )
+
         try:
             from langchain_core.rate_limiters import InMemoryRateLimiter
+            # max_bucket_size=2 lets both LLM calls per question (condense + answer)
+            # fire immediately; 0.5 req/s matches Groq's 30 RPM free-tier ceiling.
             _groq_limiter = InMemoryRateLimiter(
-                requests_per_second=0.06,
+                requests_per_second=0.5,
                 check_every_n_seconds=0.1,
-                max_bucket_size=1,
+                max_bucket_size=2,
             )
-            return ChatGroq(
-                model=groq_model,
-                api_key=SecretStr(groq_api_key),
-                temperature=0.2,
-                max_tokens=2048,
-                max_retries=2,
-                rate_limiter=_groq_limiter,
-            )
-        except (ImportError, TypeError):
-            # Older langchain-core without InMemoryRateLimiter or rate_limiter kwarg.
-            return ChatGroq(
-                model=groq_model,
-                api_key=SecretStr(groq_api_key),
-                temperature=0.2,
-                max_tokens=2048,
-                max_retries=2,
-            )
+            try:
+                return _make_groq(rate_limiter=_groq_limiter)
+            except TypeError:
+                # ChatGroq version does not support rate_limiter kwarg.
+                return _make_groq()
+        except ImportError:
+            # Older langchain-core without InMemoryRateLimiter.
+            return _make_groq()
 
     elif backend == "ollama":
         from langchain_community.chat_models import ChatOllama
@@ -277,7 +280,7 @@ def get_llm() -> BaseLanguageModel:
     else:
         raise ValueError(
             f"Unknown LLM_BACKEND '{backend}'. "
-            f"Must be 'groq', 'gemini', or 'ollama'."
+            f"Must be 'groq' or 'ollama'."
         )
 
 
@@ -294,7 +297,7 @@ def build_rag_chain() -> Runnable:
                 -> [Guardrail Retriever] filters out-of-domain queries
                 -> [Format Docs] creates context string for prompt
                 -> [Prompt] injects context and question
-                -> [LLM] generates response (Gemini or DeepSeek)
+                -> [LLM] generates response (Groq or DeepSeek via Ollama)
                 -> [Output Parser] extracts string from LLM response
                 -> Output (answer string)
 
