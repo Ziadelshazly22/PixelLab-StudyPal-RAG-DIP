@@ -26,6 +26,11 @@ build/
 # Notebooks (.ipynb) are for heavy Colab tasks only [Colab-only workspaces].
 # *.notebooks/ 
 # *.ipynb
-evaluation_report.md # Generated output, not source
+evaluation_report.md        # generated output — not source
 *.log
+*.log.*
 .DS_Store
+
+# Generated evaluation artefacts
+data/ragas_scores.csv       # produced by Cell 5 — not source
+data/ragas_checkpoint.json  # ephemeral checkpoint — not source
