@@ -50,6 +50,10 @@ pymupdf==1.27.1
     # Primary PDF text extractor (fitz)
 pdfplumber==0.11.9
     # Layout-aware PDF fallback for image-heavy or scanned PDFs
+python-docx
+    # .docx / .doc session-attachment text extraction (chat attach feature)
+python-pptx
+    # .pptx / .ppt session-attachment text extraction (chat attach feature)
 
 # -- Evaluation ---------------------------------------------------------------
 ragas==0.4.3

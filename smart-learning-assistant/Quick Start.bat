@@ -63,7 +63,7 @@ set /a attempts=0
 
 :poll_loop
 ping -n 3 127.0.0.1 >nul
-.venv\Scripts\python.exe -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)" >nul 2>&1
+curl -sf --connect-timeout 2 --max-time 3 http://127.0.0.1:8000/health >nul 2>&1
 if %ERRORLEVEL% == 0 goto server_ready
 set /a attempts+=1
 set /a elapsed=attempts*2
@@ -104,8 +104,9 @@ echo   To stop all servers cleanly, run:  Quick Exit.bat
 echo.
 echo ============================================================
 echo.
-echo   Press any key to close this launcher window.
+echo   This launcher window will close in 10 seconds...
 echo   (The backend server window must stay open while you use the app)
 echo.
-pause >nul
+timeout /t 10 /nobreak >nul
+exit /b 0
 

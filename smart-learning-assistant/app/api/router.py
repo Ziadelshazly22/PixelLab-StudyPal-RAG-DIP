@@ -7,7 +7,7 @@ Auxiliary REST endpoints for the Smart Learning Assistant.
 Routes (no prefix — registered directly on the FastAPI app):
     POST /ingest                — Upload a PDF and ingest it into ChromaDB
     GET  /status                — Knowledge-base and server health summary
-    POST /settings/llm_backend  — Switch LLM backend at runtime (gemini | ollama)
+    POST /settings/llm_backend  — Switch LLM backend at runtime (groq | ollama)
     GET  /api/health            — Legacy liveness probe
     GET  /api/info              — Legacy service metadata
 
@@ -177,8 +177,8 @@ async def get_status() -> dict:
     - ``collection``     — ChromaDB collection name
     - ``server_time``    — current UTC timestamp (ISO 8601)
     """
-    llm_backend = os.getenv("LLM_BACKEND", "gemini")
-    embedding_model = os.getenv("EMBEDDING_MODEL", "models/text-embedding-004")
+    llm_backend = os.getenv("LLM_BACKEND", "groq")
+    embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
     persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
     collection_name = "dip_knowledge_base"
 
@@ -234,7 +234,7 @@ async def set_llm_backend(body: _LLMBackendRequest) -> dict:
     """
     Update the active LLM backend by setting ``os.environ["LLM_BACKEND"]``.
 
-    Accepted values: ``"gemini"`` | ``"ollama"``
+    Accepted values: ``"groq"`` | ``"ollama"``
 
     .. note::
         The LangServe chain mounted at ``/chain/rag`` is initialised **once**
@@ -245,9 +245,9 @@ async def set_llm_backend(body: _LLMBackendRequest) -> dict:
     Raises
     ------
     400
-        If ``backend`` is not ``"gemini"`` or ``"ollama"``.
+        If ``backend`` is not ``"groq"`` or ``"ollama"``.
     """
-    _VALID = {"gemini", "ollama"}
+    _VALID = {"groq", "ollama"}
     backend = body.backend.strip().lower()
 
     if backend not in _VALID:
@@ -282,5 +282,5 @@ async def info() -> dict:
     return {
         "service": "Smart Learning Assistant",
         "version": "0.1.0",
-        "models": ["gemini-2.0-flash", "deepseek-r1"],
+        "models": ["llama-3.3-70b-versatile", "deepseek-r1"],
     }

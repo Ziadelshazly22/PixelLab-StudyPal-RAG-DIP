@@ -35,12 +35,12 @@ logging.basicConfig(
 import asyncio
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.api.router import router as api_router
-from app.chains.rag_chain import build_rag_chain, run_chain, clear_session
+from app.chains.rag_chain import build_rag_chain, run_chain, run_chain_with_doc, clear_session
 from app.summarization.summarizer import summarize_document, generate_study_questions
 
 logger = logging.getLogger(__name__)
@@ -139,6 +139,33 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Favicon — served at /favicon.ico and /favicon.svg so every browser tab
+# picks up the 🤖 icon regardless of mount path
+# ---------------------------------------------------------------------------
+_FAVICON = Path(__file__).resolve().parent / "app" / "ui" / "favicon.svg"
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon() -> FileResponse:
+    return FileResponse(_FAVICON, media_type="image/svg+xml")
+
+
+@app.get("/manifest.json", include_in_schema=False)
+async def web_app_manifest() -> JSONResponse:
+    """PWA Web App Manifest — prevents 404 log noise from browsers."""
+    return JSONResponse({
+        "name": "DIP AI Tutor",
+        "short_name": "DIP Tutor",
+        "description": "Smart Learning Assistant for Digital Image Processing",
+        "start_url": "/ui",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#1f2937",
+        "icons": [],
+    })
+
+# ---------------------------------------------------------------------------
 # Auxiliary REST routes
 # ---------------------------------------------------------------------------
 app.include_router(api_router)
@@ -196,6 +223,8 @@ async def root() -> dict:
 class _ChatRequest(BaseModel):
     question: str
     session_id: str
+    doc_context: str = ""    # extracted text from a session-attached file (never stored in KB)
+    doc_filename: str = ""  # original filename shown in source citations
 
 
 class _SummarizeRequest(BaseModel):
@@ -214,8 +243,20 @@ async def chat(body: _ChatRequest) -> dict:
     """
     loop = asyncio.get_running_loop()
     try:
+        if body.doc_context and body.doc_context.strip():
+            # Session document attached — bypass the condense-question step so
+            # the attached content is never stripped before the LLM sees it.
+            _chain_fn = lambda: run_chain_with_doc(  # noqa: E731
+                body.session_id,
+                body.question,
+                body.doc_context,
+                doc_filename=body.doc_filename or "Attached Session Document",
+            )
+        else:
+            _chain_fn = lambda: run_chain(body.session_id, body.question)  # noqa: E731
+
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, run_chain, body.session_id, body.question),
+            loop.run_in_executor(None, _chain_fn),
             timeout=90.0,
         )
     except asyncio.TimeoutError:

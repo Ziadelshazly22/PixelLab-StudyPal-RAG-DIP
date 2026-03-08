@@ -468,6 +468,99 @@ def run_chain(session_id: str, question: str) -> dict:
     }
 
 
+def run_chain_with_doc(
+    session_id: str,
+    question: str,
+    doc_context: str,
+    doc_filename: str = "Attached Session Document",
+) -> dict:
+    """Invoke the chain when the student has attached a session document.
+
+    Key improvements over a plain :func:`run_chain` call:
+
+    * **Bypasses the condense-question step** — ``ConversationalRetrievalChain``
+      compresses question + history before retrieval, which strips the attached
+      text.  This function calls the LLM directly with the full context.
+    * **Memory is properly registered** — uses :func:`get_or_create_chain` so
+      session history persists and follow-up questions work correctly.
+    * **Structured summarisation** — automatically switches to the academic
+      map-reduce layout when the question is a summarize/overview request.
+
+    Args:
+        session_id:   Session identifier (UUID string).
+        question:     The student's question.
+        doc_context:  Extracted text from the attached session document.
+        doc_filename: Original filename shown in citation metadata.
+
+    Returns:
+        dict with keys ``answer``, ``session_id``, and ``sources``.
+    """
+    # ── Get / create chain so the session is registered in MEMORY_STORE ──────
+    # This ensures that follow-up questions (even without doc) share history.
+    chain = get_or_create_chain(session_id)
+    memory = chain.memory
+
+    # ── Build context: session doc first, then KB retrieval ──────────────────
+    label = doc_filename or "Attached Session Document"
+    session_doc = Document(
+        page_content=doc_context.strip(),
+        metadata={"source": label, "page": "—"},
+    )
+    try:
+        kb_docs = get_retriever().invoke(question)
+    except Exception as exc:
+        logger.warning("KB retrieval failed in run_chain_with_doc: %s", exc)
+        kb_docs = []
+
+    all_docs = [session_doc] + kb_docs
+    context = format_docs(all_docs)
+
+    # ── Load chat history ─────────────────────────────────────────────────────
+    try:
+        chat_history = memory.load_memory_variables({}).get("chat_history", [])
+    except Exception:
+        chat_history = []
+
+    # ── Choose prompt based on intent ─────────────────────────────────────────
+    # Summarize requests → structured academic layout
+    # All other questions → normal Mentor's Flow conversational prompt
+    active_prompt = (
+        SUMMARIZE_SESSION_DOC_PROMPT
+        if _is_summarize_request(question)
+        else CONV_PROMPT
+    )
+
+    # ── LLM call ─────────────────────────────────────────────────────────────
+    llm = get_llm()
+    messages = active_prompt.format_messages(
+        chat_history=chat_history,
+        context=context,
+        question=question,
+    )
+    llm_result = llm.invoke(messages)
+    answer = (
+        llm_result.content
+        if hasattr(llm_result, "content")
+        else str(llm_result)
+    )
+
+    # ── Persist to session memory ─────────────────────────────────────────────
+    try:
+        memory.save_context({"question": question}, {"answer": answer})
+    except Exception as exc:
+        logger.warning("Could not save to session memory: %s", exc)
+
+    sources = [
+        {
+            "source": doc.metadata.get("source", "unknown"),
+            "page": doc.metadata.get("page", "?"),
+            "page_content": doc.page_content[:300],
+        }
+        for doc in all_docs[:4]
+    ]
+    return {"answer": answer, "session_id": session_id, "sources": sources}
+
+
 def clear_session(session_id: str) -> bool:
     """Remove *session_id* and its conversation history from the store.
 
@@ -539,6 +632,103 @@ CONV_PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", _CONV_SYSTEM_MESSAGE),
         ("human", _CONV_HUMAN_MESSAGE),
+    ]
+)
+
+# ---------------------------------------------------------------------------
+# Summarize-intent helpers (used by run_chain_with_doc)
+# Must live AFTER _CONV_SYSTEM_MESSAGE / CONV_PROMPT are defined.
+# ---------------------------------------------------------------------------
+
+_SUMMARIZE_KEYWORDS = frozenset({
+    # Core summarize variants
+    "summarize", "summary", "summarization", "summarise", "summarisation",
+    "summarizing", "summarising",
+    # Overview / outline
+    "overview", "outline", "outlines",
+    # Recap / review
+    "recap", "recaps", "recapping", "review", "reviews", "reviewing",
+    # Brief / short
+    "brief", "briefing", "briefly", "short overview", "quick overview",
+    # Digest / distill
+    "digest", "distill", "distillation", "distill down",
+    # Abstract / synopsis
+    "abstract", "synopsis", "synopsize",
+    # Condense / compress
+    "condense", "condensed", "condense down", "compress", "compress down",
+    # Key points / highlights
+    "key points", "key takeaways", "takeaways", "main points", "main ideas",
+    "main concepts", "key concepts", "core concepts", "core ideas",
+    "highlights", "highlight", "key highlights",
+    # Gist / essence
+    "gist", "essence", "in a nutshell", "nutshell", "in short", "in brief",
+    "in essence", "boil down", "boiled down",
+    # Wrap up / round up
+    "wrap up", "wrap-up", "wrapup", "round up", "round-up", "roundup",
+    # Explain briefly
+    "explain briefly", "explain shortly", "quick explanation",
+    "quick summary", "short summary", "brief summary", "short review",
+    # What is covered / discussed
+    "what is covered", "what does it cover", "what is discussed",
+    "what topics", "what are the topics", "what is in",
+    "what does this cover", "what does this document cover",
+    # Paraphrase / rephrase
+    "paraphrase", "paraphrasing", "rephrase", "rephrasing",
+    # Simplify
+    "simplify", "simplified", "simplification",
+    # TL;DR
+    "tldr", "tl;dr", "tl dr",
+    # Overview request phrasing
+    "give me an overview", "give an overview", "provide an overview",
+    "give me a summary", "provide a summary",
+})
+
+
+def _is_summarize_request(question: str) -> bool:
+    """Return True when the question is asking for a structured document summary."""
+    lower = question.lower()
+    return any(kw in lower for kw in _SUMMARIZE_KEYWORDS)
+
+
+_SUMMARIZE_SESSION_DOC_HUMAN = """\
+CHAT HISTORY:
+{chat_history}
+
+ATTACHED DOCUMENT (session only — treat as the primary source for this summary):
+{context}
+
+REQUEST: {question}
+
+Generate a comprehensive, academically rigorous structured summary of the attached \
+document. Use EXACTLY these sections (omit any section where the document has no \
+relevant content):
+
+## 📚 Core Concepts
+Identify and define the 3–7 key theoretical concepts, definitions, and principles. \
+Use $inline$ and $$display$$ LaTeX for all mathematical notation.
+
+## ⚙️ Key Algorithms & Formulas
+Every named algorithm, mathematical formulation, or step-by-step procedure. \
+Present each with LaTeX equations and a concise explanation.
+
+## 💻 Implementation Notes
+Any code snippets, pseudocode, or implementation details with brief line-by-line \
+explanations.
+
+## 🌍 Practical Applications
+Real-world use cases, examples, and applications discussed in the document.
+
+## 🎓 Key Exam Topics
+The 3–5 most important concepts a student must master for examination.
+
+Cite specific claims using [Source: <document name>, Page: <N>] wherever \
+page/slide numbers are identifiable from the context.
+"""
+
+SUMMARIZE_SESSION_DOC_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", _CONV_SYSTEM_MESSAGE),
+        ("human", _SUMMARIZE_SESSION_DOC_HUMAN),
     ]
 )
 

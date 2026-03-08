@@ -1,6 +1,6 @@
 # 🎓 DIP AI Tutor — Smart Learning Assistant
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green?logo=fastapi) ![LangChain](https://img.shields.io/badge/LangChain-0.3-orange) ![ChromaDB](https://img.shields.io/badge/ChromaDB-persistent-lightgrey) ![DeepSeek](https://img.shields.io/badge/DeepSeek--R1--Distill--Qwen--14B-campus-blue)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-0.135.1-green?logo=fastapi) ![LangChain](https://img.shields.io/badge/LangChain-1.2.10-orange) ![Gradio](https://img.shields.io/badge/Gradio-6.8.0-orange?logo=gradio) ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5.2-lightgrey) ![DeepSeek](https://img.shields.io/badge/DeepSeek--R1--Distill--Qwen--14B-campus-blue)
 
 A production-ready RAG microservice that acts as an AI tutor exclusively for Digital Image Processing. It grounds every answer in the *Gonzalez & Woods — Digital Image Processing (4th ed.)* textbook and verified library documentation (OpenCV, NumPy, SciPy, Matplotlib, Pillow), delivers rigorous academic citations with every factual claim, and enforces a guardrail that politely rejects off-topic questions. Designed for DIP students who need mathematically precise, cited answers — not a general-purpose chatbot.
 
@@ -28,7 +28,8 @@ The system uses a **dual-LLM strategy**: **Groq `llama-3.1-8b-instant`** (free-t
 
 - 📚 **Cited answers** — every factual claim includes `[Source: <file>, Page: <N>]` drawn directly from the knowledge base
 - 🧠 **Multi-turn memory** — per-session `ConversationBufferWindowMemory` (10-turn window) enables follow-up questions without re-stating context
-- 📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately
+- � **Session document attach** — attach any PDF, DOCX, or PPTX directly to the chat without ingesting into the KB; the LLM reads your document in full context and answers from it, including structured 5-section academic summaries on demand
+- �📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately
 - 📑 **Chapter summarization** — map-reduce chain condenses any ingested document into a structured study guide
 - 📝 **Exam question generation** — automatically generates conceptual, mathematical, and applied exam questions from any ingested source
 - 🚫 **Off-topic guardrail** — L2-distance threshold blocks non-DIP queries; 3/3 guardrail tests passed in RAGAS evaluation
@@ -43,6 +44,8 @@ Ingestion: `data/raw/*.pdf` → **PyMuPDF** (primary) / **pdfplumber** (fallback
 
 Query: Student question → **MMR Retriever** (k=12, fetch_k=50, λ=0.9) + **L2 guardrail** (threshold=1.2; out-of-domain returns `[]`) → **RAG Prompt** (strict citation + off-topic refusal rules) → **Groq `llama-3.1-8b-instant`** (demo) or **DeepSeek-R1-Distill-Qwen-14B via Ollama** (campus) → cited Markdown answer with LaTeX equations → **Gradio UI** or **FastAPI REST**.
 
+Session-doc attach: User attaches PDF / DOCX / PPTX → PyMuPDF / python-docx / python-pptx text extraction → prepended as context `Document` (never stored in ChromaDB) → LLM called directly, bypassing `ConversationalRetrievalChain`'s condense step → answer from the attached document, not the KB.
+
 ```text
 data/raw/*.pdf
      |  PyMuPDF / pdfplumber
@@ -53,8 +56,16 @@ data/raw/*.pdf
  ChromaDB  <-------------- POST /ingest
      |  MMR k=12 + L2 guardrail
      v
- RAG Prompt --> Groq llama-3.1-8b-instant
-             or DeepSeek-R1-Distill-Qwen-14B (Ollama, campus)
+ RAG Prompt --> Groq llama-3.1-8b-instant           [KB-only path]
+             or DeepSeek-R1-Distill-Qwen-14B (Ollama)
+
+ Attached file (PDF/DOCX/PPTX)
+     |  PyMuPDF / python-docx / python-pptx
+     v
+ Session Document (in-memory, never stored)
+     |  prepended to KB docs for the LLM call
+     v
+ CONV_PROMPT / SUMMARIZE_SESSION_DOC_PROMPT         [session-doc path]
      |
      v
  Cited answer --> FastAPI REST  /chat  /chain/rag/invoke
@@ -71,26 +82,29 @@ smart-learning-assistant/
 ├── app/
 │   ├── api/
 │   │   ├── __init__.py
-│   │   └── router.py              # POST /ingest, GET /status, POST /settings/llm_backend
+│   │   └── router.py              # POST /ingest, GET /status, POST /settings/llm_backend, GET /api/info
 │   ├── chains/
 │   │   ├── __init__.py
-│   │   └── rag_chain.py           # LCEL + ConversationalRetrievalChain, session store
+│   │   └── rag_chain.py           # LCEL stateless chain + ConversationalRetrievalChain (session store)
+│   │                              # + run_chain_with_doc() — session-doc bypass path
+│   │                              # + SUMMARIZE_SESSION_DOC_PROMPT — structured 5-section summary
 │   ├── ingestion/
 │   │   ├── __init__.py
-│   │   └── pipeline.py            # PDF extraction, chunking, embedding, ChromaDB persist
+│   │   └── pipeline.py            # PDF extraction (PyMuPDF/pdfplumber), chunking, embedding, ChromaDB
 │   ├── retrieval/
 │   │   ├── __init__.py
-│   │   └── retriever.py           # MMR retriever + L2-distance guardrail wrapper
+│   │   └── retriever.py           # MMR retriever + L2-distance guardrail (threshold=1.2)
 │   ├── summarization/
 │   │   ├── __init__.py
-│   │   └── summarizer.py          # Map-reduce summary + exam question generation
+│   │   └── summarizer.py          # Map-reduce summary (tenacity retry) + exam question generation
 │   ├── evaluation/
 │   │   ├── __init__.py
 │   │   ├── metrics.py             # Phase A: collect_answers | Phase B: RAGAS scoring
 │   │   └── test_questions.json    # 15 DIP + 3 off-topic evaluation questions
 │   └── ui/
 │       ├── __init__.py
-│       └── interface.py           # Gradio Blocks chat + upload UI
+│       ├── favicon.svg            # 🤖 robot SVG favicon (also served inline as base64)
+│       └── interface.py           # Gradio Blocks chat + upload UI; session-doc attach panel
 ├── data/                          # gitignored — not committed
 │   ├── chroma_db/                 # Persistent vector store (build via Colab notebook)
 │   └── raw/
@@ -108,9 +122,11 @@ smart-learning-assistant/
 │   └── calibrate_threshold.py     # Tune guardrail L2 threshold
 ├── tests/
 │   ├── __init__.py
-│   ├── conftest.py                # pytest fixtures
-│   ├── test_ingestion.py          # Unit tests for pipeline.py
-│   └── test_rag_components.py     # Unit tests for retriever + chain
+│   ├── conftest.py                # pytest fixtures (shared across all test modules)
+│   ├── test_ingestion.py          # Unit tests for ingestion pipeline
+│   ├── test_rag_components.py     # Unit tests for retriever + RAG chain
+│   ├── test_metrics.py            # Unit tests for evaluation metrics
+│   └── test_summarizer.py         # Unit tests for summarizer
 ├── .env.example                   # Copy to .env and fill in secrets
 ├── .gitignore
 ├── pytest.ini                     # pytest config (testpaths = tests)
@@ -118,8 +134,8 @@ smart-learning-assistant/
 ├── run_all.py                     # Full health-check / go-no-go checklist
 ├── DEMO_SCRIPT.md                 # 5-minute timed demo walkthrough
 ├── evaluation_report.md           # Final RAGAS evaluation report (committed)
-├── main.py                        # FastAPI entry point
-├── Quick Start.bat                # Windows one-click launcher
+├── main.py                        # FastAPI entry point + /manifest.json PWA route
+├── Quick Start.bat                # Windows one-click launcher (auto-closes in 10 s)
 ├── Quick Exit.bat                 # Windows one-click shutdown
 └── requirements.txt
 ```
@@ -201,12 +217,14 @@ Large-scale PDF ingestion and RAGAS evaluation are designed for **Google Colab**
 | `/api/health` | GET | Auxiliary liveness probe | — | `{"status": "ok"}` |
 | `/api/info` | GET | Service version + active models | — | `{"version": str, "llm_backend": str, ...}` |
 | `/chain/rag/invoke` | POST | Stateless one-shot RAG query | `{"input": "<question>"}` | `{"output": "<answer>"}` |
-| `/chat` | POST | Stateful multi-turn chat (session memory) | `{"question": str, "session_id": str}` | `{"answer": str, "session_id": str, "sources": list}` |
+| `/chat` | POST | Stateful multi-turn chat (session memory) | `{"question": str, "session_id": str, "doc_context": str (opt), "doc_filename": str (opt)}` | `{"answer": str, "session_id": str, "sources": list}` |
 | `/chat/{session_id}` | DELETE | Clear session memory buffer | — | `{"status": "cleared"\|"not_found"}` |
 | `/ingest` | POST | Upload and ingest a PDF into ChromaDB | `multipart/form-data: file=<pdf>` | `{"chunks_added": int, "source": str}` |
 | `/status` | GET | Knowledge-base stats (chunk count, sources) | — | `{"collection": str, "chunks": int, ...}` |
 | `/settings/llm_backend` | POST | Switch LLM backend at runtime | `{"backend": "groq"\|"ollama"}` | `{"active_backend": str}` |
 | `/summarize` | POST | Map-reduce summary + study questions | `{"source": str, "include_questions": bool, "n_questions": int}` | `{"summary": str, "study_questions": list}` |
+| `/manifest.json` | GET | PWA Web App Manifest (suppresses browser 404 noise) | — | JSON manifest |
+| `/favicon.ico` | GET | Browser tab favicon (🤖 SVG) | — | SVG |
 | `/docs` | GET | Interactive Swagger UI | — | HTML |
 
 ---
@@ -241,6 +259,7 @@ All settings are loaded from `.env` (copy from `.env.example`):
 | `LLM_BACKEND` | `groq` | Active LLM backend: `groq` (demo/dev) or `ollama` (campus/offline) |
 | `GROQ_API_KEY` | *(required for groq)* | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) |
 | `LLM_MODEL` | `llama-3.1-8b-instant` | Groq model name (used when `LLM_BACKEND=groq`) |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | SentenceTransformers model for local embeddings (no API key needed) |
 | `CHROMA_PERSIST_DIR` | `./data/chroma_db` | Path to the persistent ChromaDB vector store |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL (used when `LLM_BACKEND=ollama`) |
 | `DEEPSEEK_MODEL` | `deepseek-r1` | Ollama model name for campus deployment |

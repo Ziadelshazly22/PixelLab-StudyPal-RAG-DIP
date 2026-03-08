@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MAP_TEMPLATE = """\
-You are summarising a section of a Digital Image Processing textbook.
+You are summarizing a section of a Digital Image Processing textbook.
 Preserve: key concepts, algorithm names, mathematical formulas (LaTeX), and any cited theorems.
 Be concise but technically precise:
 
@@ -43,7 +43,7 @@ Be concise but technically precise:
 
 _COMBINE_TEMPLATE = """\
 You are a DIP expert creating a comprehensive study guide chapter summary from individual section summaries.
-Organise by: (1) Core Concepts, (2) Key Algorithms & Formulas,
+Organize by: (1) Core Concepts, (2) Key Algorithms & Formulas,
 (3) Practical Applications, (4) Common Exam Topics.
 Maintain all LaTeX notation:
 
@@ -95,7 +95,7 @@ def get_source_chunks(source_filename: str) -> list[Document]:
         )
         docs = [
             Document(page_content=text, metadata=meta)
-            for text, meta in zip(raw["documents"], raw["metadatas"])
+            for text, meta in zip(raw["documents"] or [], raw["metadatas"] or [])
             if text and text.strip()
         ]
 
@@ -108,7 +108,7 @@ def get_source_chunks(source_filename: str) -> list[Document]:
         )
         docs = [
             Document(page_content=text, metadata=meta)
-            for text, meta in zip(raw["documents"], raw["metadatas"])
+            for text, meta in zip(raw["documents"] or [], raw["metadatas"] or [])
             if text and text.strip()
         ]
 

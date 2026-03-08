@@ -362,13 +362,7 @@ def get_processed_sources(chroma_client: Any) -> set[str]:
 def _is_auth_error(exc: BaseException) -> bool:
     """
     Return True if the exception (or any chained cause) indicates an
-    unrecoverable API-key or API-version error that retrying cannot fix.
-
-    Catches two distinct failure modes:
-    - 400 INVALID_ARGUMENT / API key expired  → key is invalid/expired
-    - 404 NOT_FOUND / model not found for v1beta → langchain-google-genai v2+
-      installed; it routes embeddings to the v1beta endpoint where
-      text-embedding-004 is not exposed (fix: pin langchain-google-genai<2.0)
+    unrecoverable API-key error that retrying cannot fix.
     """
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -383,10 +377,6 @@ def _is_auth_error(exc: BaseException) -> bool:
                 "api key not valid",
                 "key expired",
                 "invalid_argument",
-                # 404 raised by google-genai SDK (langchain-google-genai v2+)
-                # when text-embedding-004 is unavailable at the v1beta endpoint
-                "not found for api version",
-                "not supported for embedcontent",
             )
         ):
             return True
@@ -416,9 +406,8 @@ def embed_and_store(
     """Embed *chunks* and persist them to the ChromaDB collection in batches.
 
     Creates (or opens) the ``dip_knowledge_base`` Chroma collection at
-    *persist_dir*.  Chunks are sent to the Google embedding API in batches
-    of *batch_size* with a 1.2-second sleep between batches to stay within
-    Google's 1 500 req/min rate limit.
+    *persist_dir*.  Chunks are embedded and stored in batches of *batch_size*
+    with a short sleep between batches to stay within API rate limits.
 
     On an unrecoverable API error (expired key, wrong SDK version), raises
     a :class:`RuntimeError` immediately with human-readable remediation steps.
@@ -459,17 +448,13 @@ def embed_and_store(
         try:
             _add_with_retry(vector_store, batch)
             stored += len(batch)
-            time.sleep(1.2)  # respect Google's 1 500 req/min rate limit
+            time.sleep(1.2)  # brief pause between batches to respect rate limits
         except Exception as _batch_exc:
             if _is_auth_error(_batch_exc):
                 raise RuntimeError(
                     "\n❌  Embedding API error — aborting ingestion.\n\n"
-                    "  Cause A — API key expired / invalid:\n"
-                    "    1. Get a fresh key  →  https://aistudio.google.com/app/apikey\n"
-                    "    2. Re-run the 'Update API Key' cell, then re-run ingestion.\n\n"
-                    "  Cause B — langchain-google-genai v2 installed (404 v1beta):\n"
-                    "    Cell 2 must pin:  langchain-google-genai<2.0\n"
-                    "    Runtime → Restart session, then run ALL cells from Cell 2."
+                    "  Cause — API key expired / invalid:\n"
+                    "    Check your GROQ_API_KEY in .env and ensure it is valid.\n"
                 ) from _batch_exc
             logger.error(
                 "Failed to store batch after 3 retries — skipping %d chunks.",
@@ -694,7 +679,6 @@ def load_vectorstore(persist_dir: str | None = None):
     2. Reads the stored vector dimension and selects the matching embedding
        model automatically:
        - **384-dim** → ``all-MiniLM-L6-v2`` (HuggingFace, local)
-       - **768-dim** → ``models/text-embedding-004`` (Google)
        - **unknown**  → follows normal primary/fallback logic
 
     Args:
