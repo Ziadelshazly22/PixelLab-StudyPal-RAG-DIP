@@ -97,8 +97,8 @@ app = FastAPI(
     description=(
         "RAG-Powered AI Tutor grounded in the Gonzalez & Woods DIP textbook "
         "and verified code documentation.  "
-        "Dual-LLM strategy: Gemini 2.0 Flash (primary) + DeepSeek-R1 (fallback). "
-        "Powered by LangChain, LangServe, and ChromaDB."
+        "Dual-LLM strategy: Groq llama-3.1-8b-instant (demo/dev) + DeepSeek-R1-Distill-Qwen-14B via Ollama (campus). "
+        "Powered by LangChain LCEL(LangChain Expression Language ) and ChromaDB."
     ),
     version="0.1.0",
     docs_url="/docs",

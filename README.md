@@ -1,282 +1,274 @@
-# Smart Learning Assistant
+# 🎓 DIP AI Tutor — Smart Learning Assistant
 
-> **RAG-Powered AI Tutor for Digital Image Processing**
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green?logo=fastapi) ![LangChain](https://img.shields.io/badge/LangChain-0.3-orange) ![ChromaDB](https://img.shields.io/badge/ChromaDB-persistent-lightgrey) ![DeepSeek](https://img.shields.io/badge/DeepSeek--R1--Distill--Qwen--14B-campus-blue)
 
-A production-ready microservice that grounds every answer in the *Gonzalez & Woods* textbook and verified library documentation (OpenCV, scikit-image). It delivers grounded, cited answers powered by **Groq `llama-3.1-8b-instant`** through a clean REST API and an interactive Gradio chat interface.
+A production-ready RAG microservice that acts as an AI tutor exclusively for Digital Image Processing. It grounds every answer in the *Gonzalez & Woods — Digital Image Processing (4th ed.)* textbook and verified library documentation (OpenCV, NumPy, SciPy, Matplotlib, Pillow), delivers rigorous academic citations with every factual claim, and enforces a guardrail that politely rejects off-topic questions. Designed for DIP students who need mathematically precise, cited answers — not a general-purpose chatbot.
 
-Built with **LangChain · FastAPI · ChromaDB · Gradio**.
+The system uses a **dual-LLM strategy**: **Groq `llama-3.1-8b-instant`** (free-tier API, zero billing required) is the primary backend for development and demo. For campus deployment on a private server where a Groq API key is not desirable, set `LLM_BACKEND=ollama` to switch to **DeepSeek-R1-Distill-Qwen-14B** running locally via Ollama — fully offline, zero API cost, no data leaves the institution's network.
 
 ---
 
 ## Table of Contents
 
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Quick Start](#quick-start)
-- [Environment Variables](#environment-variables)
-- [Module Overview](#module-overview)
-- [API Reference](#api-reference)
-- [Running Tests](#running-tests)
-- [Evaluation Results](#evaluation-results)
-- [Tech Stack](#tech-stack)
+- [Features](#-features)
+- [Architecture](#️-architecture)
+- [Project Structure](#-project-structure)
+- [Quick Start](#-quick-start)
+- [API Reference](#-api-reference)
+- [Evaluation Results](#-evaluation-results)
+- [Configuration](#️-configuration)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
+- [Author](#-author)
 - [License](#license)
 
 ---
 
-## Architecture
+## ✨ Features
 
-```plaintext
-User (browser / API client)
-        │
-        ▼
-┌───────────────────────────────────────────┐
-│          FastAPI  (main.py)               │
-│  ┌──────────────┐  ┌─────────────────┐   │
-│  │  REST routes │  │  RAG chain      │   │
-│  │  /api/*      │  │  /rag/invoke    │   │
-│  └──────────────┘  └─────────────────┘   │
-│           │                │             │
-│           ▼                ▼             │
-│     app/api/        app/chains/          │
-│     router.py       rag_chain.py         │
-│                          │               │
-│                    app/retrieval/        │
-│                    retriever.py          │
-│                          │               │
-│                    ChromaDB (local)      │
-│                    ← app/ingestion/ ─►   │
-│                      pipeline.py         │
-└───────────────────────────────────────────┘
-        │
-        ▼
-   Gradio UI  (/ui)
-```
-
-**Ingestion pipeline:** `data/raw/*.pdf` → PyMuPDF loader → `RecursiveCharacterTextSplitter` → `all-MiniLM-L6-v2` embeddings → ChromaDB
-
-**Query pipeline:** Question → MMR retrieval → LCEL chain (prompt + LLM) → cited answer
+- 📚 **Cited answers** — every factual claim includes `[Source: <file>, Page: <N>]` drawn directly from the knowledge base
+- 🧠 **Multi-turn memory** — per-session `ConversationBufferWindowMemory` (10-turn window) enables follow-up questions without re-stating context
+- 📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately
+- 📑 **Chapter summarization** — map-reduce chain condenses any ingested document into a structured study guide
+- 📝 **Exam question generation** — automatically generates conceptual, mathematical, and applied exam questions from any ingested source
+- 🚫 **Off-topic guardrail** — L2-distance threshold blocks non-DIP queries; 3/3 guardrail tests passed in RAGAS evaluation
+- 🔄 **Dual-LLM backend** — `LLM_BACKEND=groq` (Groq `llama-3.1-8b-instant`, free tier) for development; `LLM_BACKEND=ollama` (DeepSeek-R1-Distill-Qwen-14B, fully local) for campus deployment
+- 📊 **RAGAS-evaluated quality** — 0.790 overall score across 4 metrics on a 15-question DIP test set; all metrics ≥ 0.7
 
 ---
 
-## Project Structure
+## 🏗️ Architecture
+
+Ingestion: `data/raw/*.pdf` → **PyMuPDF** (primary) / **pdfplumber** (fallback) → `RecursiveCharacterTextSplitter` (chunk_size=800 chars, overlap=150) → **`all-MiniLM-L6-v2`** local embeddings → **ChromaDB** persistent store.
+
+Query: Student question → **MMR Retriever** (k=12, fetch_k=50, λ=0.9) + **L2 guardrail** (threshold=1.2; out-of-domain returns `[]`) → **RAG Prompt** (strict citation + off-topic refusal rules) → **Groq `llama-3.1-8b-instant`** (demo) or **DeepSeek-R1-Distill-Qwen-14B via Ollama** (campus) → cited Markdown answer with LaTeX equations → **Gradio UI** or **FastAPI REST**.
+
+```text
+data/raw/*.pdf
+     |  PyMuPDF / pdfplumber
+     v
+ Chunker (800 chars / 150 overlap)
+     |  all-MiniLM-L6-v2
+     v
+ ChromaDB  <-------------- POST /ingest
+     |  MMR k=12 + L2 guardrail
+     v
+ RAG Prompt --> Groq llama-3.1-8b-instant
+             or DeepSeek-R1-Distill-Qwen-14B (Ollama, campus)
+     |
+     v
+ Cited answer --> FastAPI REST  /chat  /chain/rag/invoke
+                             |
+                       Gradio UI  /ui
+```
+
+---
+
+## 📁 Project Structure
 
 ```text
 smart-learning-assistant/
 ├── app/
-│   ├── api/                   # FastAPI routers
+│   ├── api/
 │   │   ├── __init__.py
-│   │   └── router.py
-│   ├── chains/                # LangChain RAG chains
+│   │   └── router.py              # POST /ingest, GET /status, POST /settings/llm_backend
+│   ├── chains/
 │   │   ├── __init__.py
-│   │   └── rag_chain.py
-│   ├── ingestion/             # PDF parsing, chunking, embedding
+│   │   └── rag_chain.py           # LCEL + ConversationalRetrievalChain, session store
+│   ├── ingestion/
 │   │   ├── __init__.py
-│   │   └── pipeline.py
-│   ├── retrieval/             # Retriever logic
+│   │   └── pipeline.py            # PDF extraction, chunking, embedding, ChromaDB persist
+│   ├── retrieval/
 │   │   ├── __init__.py
-│   │   └── retriever.py
-│   ├── summarization/         # Chapter summarization chains
+│   │   └── retriever.py           # MMR retriever + L2-distance guardrail wrapper
+│   ├── summarization/
 │   │   ├── __init__.py
-│   │   └── summarizer.py
-│   ├── evaluation/            # Metrics, RAGAS scripts
+│   │   └── summarizer.py          # Map-reduce summary + exam question generation
+│   ├── evaluation/
 │   │   ├── __init__.py
-│   │   └── metrics.py
-│   └── ui/                    # Gradio interface
+│   │   ├── metrics.py             # Phase A: collect_answers | Phase B: RAGAS scoring
+│   │   └── test_questions.json    # 15 DIP + 3 off-topic evaluation questions
+│   └── ui/
 │       ├── __init__.py
-│       └── interface.py
-├─── data/
-│    ├── chroma_db/             # Persistent Chroma vector store
-│    └── raw/
-│        │
-│        ├── 1_textbooks/
-│        │   │
-│        │   └── Digital_Image_Processing_Gonzalez_Woods_4th_Ed.pdf
-│        │
-│        ├── 2_core_vision/
-│        │   │
-│        │   ├── opencv2ref.pdf
-│        │   │ 
-│        │   ├── numpy-user.pdf
-│        │   │
-│        │   └── scipy-ref.pdf
-│        │
-│        └── 3_python_utilities/
-│            │  
-│            ├── Matplotlib.pdf
-│            │     
-│            └── pillow.pdf    
-│     
-├── notebooks/                 # Prototyping notebooks
-├── tests/                     # Unit tests
+│       └── interface.py           # Gradio Blocks chat + upload UI
+├── data/                          # gitignored — not committed
+│   ├── chroma_db/                 # Persistent vector store (build via Colab notebook)
+│   └── raw/
+│       ├── 1_textbooks/           # Gonzalez & Woods DIP 4th ed.
+│       ├── 2_core_vision/         # OpenCV, NumPy, SciPy docs
+│       └── 3_python_utilities/    # Matplotlib, Pillow docs
+├── notebooks/                     # Google Colab only — heavy ingestion & eval
+│   ├── ingestion_colab.ipynb      # Run on Colab to build chroma_db/
+│   └── evaluation_colab.ipynb     # Run on Colab for RAGAS Phase B scoring
+├── scripts/
+│   ├── run_ingestion.py           # CLI wrapper for ingestion pipeline
+│   ├── smoke_test.py              # Quick end-to-end request check
+│   ├── test_vectorstore.py        # Verify ChromaDB collection stats
+│   ├── inspect_chroma.py          # Browse stored chunks interactively
+│   └── calibrate_threshold.py     # Tune guardrail L2 threshold
+├── tests/
 │   ├── __init__.py
-│   ├── conftest.py
-│   ├── test_ingestion.py
-│   └── test_rag_components.py
-├── .env.example               # Environment variable template
+│   ├── conftest.py                # pytest fixtures
+│   ├── test_ingestion.py          # Unit tests for pipeline.py
+│   └── test_rag_components.py     # Unit tests for retriever + chain
+├── .env.example                   # Copy to .env and fill in secrets
 ├── .gitignore
-├── pytest.ini                 # pytest configuration
-├── main.py                    # FastAPI entry point
-├── requirements.txt
-└── README.md
+├── pytest.ini                     # pytest config (testpaths = tests)
+├── validate_setup.py              # Pre-flight environment check
+├── run_all.py                     # Full health-check / go-no-go checklist
+├── DEMO_SCRIPT.md                 # 5-minute timed demo walkthrough
+├── evaluation_report.md           # Final RAGAS evaluation report (committed)
+├── main.py                        # FastAPI entry point
+├── Quick Start.bat                # Windows one-click launcher
+├── Quick Exit.bat                 # Windows one-click shutdown
+└── requirements.txt
 ```
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python **3.10+** (project tested on 3.12)
-- A [Groq Cloud](https://console.groq.com/keys) API key — `llama-3.1-8b-instant` is the primary LLM
+- Python **3.10+** (tested on 3.12)
+- A [Groq Cloud](https://console.groq.com/keys) API key — free tier, no billing required
+- *(Campus/Offline deployment only)* [Ollama](https://ollama.com) with `deepseek-r1` pulled
 
-### 1. Clone & create environment
+### Installation
 
 ```bash
+# 1. Clone the repo
 git clone https://github.com/Ziadelshazly22/PixelLab-StudyPal-RAG-DIP.git
 cd PixelLab-StudyPal-RAG-DIP/smart-learning-assistant
 
-# Windows
+# 2. Create and activate a virtual environment
+# Windows:
 py -3 -m venv .venv
 .venv\Scripts\activate
+# macOS / Linux:
+python3 -m venv .venv && source .venv/bin/activate
 
-# macOS / Linux
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 2. Install dependencies
-
-```bash
+# 3. Install dependencies
 pip install -r requirements.txt
+
+# 4. Configure secrets
+copy .env.example .env     # Windows  |  cp .env.example .env  (macOS/Linux)
+# Open .env and set GROQ_API_KEY=gsk_...
+
+# 5. Validate your environment (recommended before first run)
+python validate_setup.py
 ```
 
-### 3. Configure environment variables
+### Running the Application
+
+> **Windows users:** Double-click **`Quick Start.bat`** — it detects whether the server is already running, starts it if not, and opens the UI automatically.
+> To stop all processes cleanly, run **`Quick Exit.bat`**.
+
+For manual control or non-Windows systems:
 
 ```bash
-cp .env.example .env
-# Open .env and fill in your API keys
-```
+# Terminal 1 — FastAPI server
+# Wait for "Application startup complete" before opening Terminal 2
+uvicorn main:app --reload --port 8000
 
-### 4. Ingest your documents
-
-Drop PDF files (e.g. *Gonzalez & Woods – Digital Image Processing*) into `data/raw/`, then run:
-
-```bash
-python -m app.ingestion.pipeline
-```
-
-### 5. Start the server
-
-```bash
-python main.py
-# or with auto-reload during development:
-uvicorn main:app --reload
+# Terminal 2 — Gradio UI (optional; also available mounted at /ui inside FastAPI)
+python app/ui/interface.py
 ```
 
 | Endpoint | URL |
 | --- | --- |
 | API root | `http://localhost:8000/` |
-| Interactive docs (Swagger) | `http://localhost:8000/docs` |
-| ReDoc | `http://localhost:8000/redoc` |
+| Swagger docs | `http://localhost:8000/docs` |
 | Gradio chat UI | `http://localhost:8000/ui` |
 
+### For Heavy Processing (Ingestion & Evaluation)
+
+Large-scale PDF ingestion and RAGAS evaluation are designed for **Google Colab** where GPU memory and network quota are not bottlenecks:
+
+1. **Ingestion** — open `notebooks/ingestion_colab.ipynb` in Colab, mount your Google Drive, upload the PDFs, run all cells → download `data/chroma_db/` and place it at `smart-learning-assistant/data/chroma_db/`.
+2. **Evaluation** — collect answers locally with `python app/evaluation/metrics.py --phase collect`, upload `data/eval_intermediate.json` to Colab, open `notebooks/evaluation_colab.ipynb`, run all cells → download `evaluation_report.md`.
+
+> `.py` equivalents in `scripts/` and `app/evaluation/metrics.py` are available for teams with access to a strong local or campus server.
+
 ---
 
-## Environment Variables
+## 📡 API Reference
 
-| Variable | Required | Description |
+| Endpoint | Method | Description | Request Body | Response |
+| --- | --- | --- | --- | --- |
+| `/` | GET | Root status + nav links | — | `{"message": str, "docs": str, "ui": str}` |
+| `/health` | GET | Liveness probe (Docker/load-balancer) | — | `{"status": "ok"}` |
+| `/api/health` | GET | Auxiliary liveness probe | — | `{"status": "ok"}` |
+| `/api/info` | GET | Service version + active models | — | `{"version": str, "llm_backend": str, ...}` |
+| `/chain/rag/invoke` | POST | Stateless one-shot RAG query | `{"input": "<question>"}` | `{"output": "<answer>"}` |
+| `/chat` | POST | Stateful multi-turn chat (session memory) | `{"question": str, "session_id": str}` | `{"answer": str, "session_id": str, "sources": list}` |
+| `/chat/{session_id}` | DELETE | Clear session memory buffer | — | `{"status": "cleared"\|"not_found"}` |
+| `/ingest` | POST | Upload and ingest a PDF into ChromaDB | `multipart/form-data: file=<pdf>` | `{"chunks_added": int, "source": str}` |
+| `/status` | GET | Knowledge-base stats (chunk count, sources) | — | `{"collection": str, "chunks": int, ...}` |
+| `/settings/llm_backend` | POST | Switch LLM backend at runtime | `{"backend": "groq"\|"ollama"}` | `{"active_backend": str}` |
+| `/summarize` | POST | Map-reduce summary + study questions | `{"source": str, "include_questions": bool, "n_questions": int}` | `{"summary": str, "study_questions": list}` |
+| `/docs` | GET | Interactive Swagger UI | — | HTML |
+
+---
+
+## 📊 Evaluation Results
+
+Evaluated with **RAGAS** on 15 DIP questions + 3 off-topic guardrail checks, using **Groq `llama-3.1-8b-instant`** as judge LLM.
+
+| Metric | Score | Target | Status |
+| --- | --- | --- | --- |
+| Faithfulness | 0.726 | ≥ 0.700 | ✅ PASS |
+| Answer Relevancy | 0.807 | ≥ 0.700 | ✅ PASS |
+| Context Precision | 0.918 | ≥ 0.700 | ✅ PASS |
+| Context Recall | 0.709 | ≥ 0.700 | ✅ PASS |
+| **Overall (mean)** | **0.790** | **≥ 0.700** | **✅ PASS** |
+| Guardrail (3 off-topic) | 3 / 3 | 3 / 3 | ✅ PASS |
+| Mean Response Latency | 23.78 s | < 5.0 s | ⚠️ Over target* |
+
+> \*Latency is dominated by Groq's free-tier rate-limiter (`EVAL_REQUEST_DELAY=15 s`), not actual LLM inference time. Switching to Ollama on a local server eliminates API throttling.
+
+To reproduce: `python app/evaluation/metrics.py --phase collect` (local), then `notebooks/evaluation_colab.ipynb` (Colab).
+Full per-topic breakdown: [`evaluation_report.md`](smart-learning-assistant/evaluation_report.md).
+
+---
+
+## ⚙️ Configuration
+
+All settings are loaded from `.env` (copy from `.env.example`):
+
+| Variable | Default | Description |
 | --- | --- | --- |
-| `GROQ_API_KEY` | ✅ | Groq API key — [Groq Console](https://console.groq.com/keys) |
-| `LLM_MODEL` | ✅ | Groq model name (default: `llama-3.1-8b-instant`) |
-| `CHROMA_PERSIST_DIR` | ✅ | Path to ChromaDB storage (default: `./data/chroma_db`) |
-| `OLLAMA_BASE_URL` | ⬜ | Optional Ollama server URL (legacy fallback) |
-| `DEEPSEEK_MODEL` | ⬜ | Optional DeepSeek model name for Ollama (legacy fallback) |
+| `LLM_BACKEND` | `groq` | Active LLM backend: `groq` (demo/dev) or `ollama` (campus/offline) |
+| `GROQ_API_KEY` | *(required for groq)* | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) |
+| `LLM_MODEL` | `llama-3.1-8b-instant` | Groq model name (used when `LLM_BACKEND=groq`) |
+| `CHROMA_PERSIST_DIR` | `./data/chroma_db` | Path to the persistent ChromaDB vector store |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL (used when `LLM_BACKEND=ollama`) |
+| `DEEPSEEK_MODEL` | `deepseek-r1` | Ollama model name for campus deployment |
+| `API_HOST` | `0.0.0.0` | FastAPI bind address |
+| `API_PORT` | `8000` | FastAPI port |
+| `LOG_LEVEL` | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`) |
 
 ---
 
-## Module Overview
+## 🔮 Roadmap
 
-| Module | File | Responsibility |
-| --- | --- | --- |
-| `app.api` | `router.py` | Auxiliary REST endpoints (`/api/health`, `/api/info`) |
-| `app.chains` | `rag_chain.py` | LCEL RAG chain — retriever → prompt → groq(llama-3.1-8b-instant) → parser |
-| `app.ingestion` | `pipeline.py` | PDF → chunk → embed → persist to ChromaDB |
-| `app.retrieval` | `retriever.py` | MMR retriever over the persisted ChromaDB collection |
-| `app.summarization` | `summarizer.py` | Map-reduce chapter summarisation chain |
-| `app.evaluation` | `metrics.py` | RAGAS (faithfulness, relevancy, recall) + ROUGE-L scoring |
-| `app.ui` | `interface.py` | Gradio Blocks chat interface, mounted at `/ui` |
+- 🧮 **Nougat OCR** — pipe scanned textbook pages through `nougat-ocr` before chunking to preserve LaTeX equations as structured text rather than raw image pixels
+- 🖼️ **Image-aware multimodal RAG** — extend the pipeline to index and retrieve diagram images (edge detection examples, frequency spectra) alongside text chunks
+- 👤 **Student progress tracking** — per-student session analytics, topic coverage heatmap, concept-mastery scoring
+- 🎓 **Automated quiz generation with grading** — generate and auto-grade multiple-choice and fill-in-the-blank assessments; export results to a gradebook
+- 🌐 **React frontend** — replace the Gradio demo UI with a full-featured React SPA for integration into the [PixelLab Learning Platform](https://github.com/Ziadelshazly22/PixelLab)
 
 ---
 
-## API Reference
+## 🤝 Contributing
 
-### `GET /`
-
-Returns service status and navigation links.
-
-### `GET /health`
-
-Top-level liveness probe — used by Docker / load-balancer health checks. Returns `{"status": "ok"}`.
-
-### `GET /api/health`
-
-Auxiliary liveness probe via the API router — returns `{"status": "ok"}`.
-
-### `GET /api/info`
-
-Returns service version and active model names.
-
-### `POST /rag/invoke` *(after ingestion)*
-
-RAG chain endpoint — LCEL pipeline (retriever → prompt → Groq LLM).
-
-```json
-{ "input": "Explain the Sobel edge detection operator." }
-```
-
-### `GET /docs`
-
-Full OpenAPI / Swagger interactive documentation.
+See `CONTRIBUTING.md` for the dual-environment workflow and the `.ipynb ↔ .py` convention: Colab notebooks (`notebooks/`) are authoritative for heavy GPU/quota tasks (ingestion, RAGAS scoring); local `.py` files are authoritative for all other development. Never commit `.env`, `data/chroma_db/`, or `data/raw/` — they are gitignored.
 
 ---
 
-## Running Tests
+## 👤 Author
 
-```bash
-pytest tests/ -v
-```
-
----
-
-## Evaluation Results
-
-| Metric | Score | Threshold |
-| --- | --- | --- |
-| Faithfulness | 0.726 | ≥ 0.7 ✅ |
-| Answer Relevancy | 0.807 | ≥ 0.7 ✅ |
-| Context Precision | 0.918 | ≥ 0.7 ✅ |
-| Context Recall | 0.709 | ≥ 0.7 ✅ |
-| **Overall** | **0.790** | **≥ 0.7 ✅** |
-
-Evaluated with RAGAS on a 25-question test set grounded in the *Gonzalez & Woods* textbook. Full report: [`evaluation_report.md`](smart-learning-assistant/evaluation_report.md).
-
----
-
-## Tech Stack
-
-| Layer | Library / Tool |
-| --- | --- |
-| LLM orchestration | LangChain 0.3 |
-| LLM | Groq `llama-3.1-8b-instant` (`langchain-groq`) |
-| Embeddings | `all-MiniLM-L6-v2` (sentence-transformers, local) |
-| Vector store | ChromaDB (`langchain-chroma`) |
-| PDF parsing | PyMuPDF (fitz), pdfplumber |
-| LaTeX / math OCR | Nougat (`nougat-ocr`) |
-| API server | FastAPI, Uvicorn |
-| Chat UI | Gradio |
-| Evaluation | RAGAS, ROUGE-score |
-| Image processing | OpenCV, scikit-image |
-| Testing | pytest |
+**Ziad Mahmoud ElShazly** — [ziad.m.elshazly@gmail.com](mailto:ziad.m.elshazly@gmail.com)
 
 ---
 

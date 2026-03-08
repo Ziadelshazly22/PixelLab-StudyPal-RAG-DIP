@@ -20,7 +20,7 @@ Mode 2 — Stateful (``POST /chat`` with session memory):
 Session store: module-level dict, max 100 active sessions, TTL 3600 s.
 Background thread cleans expired sessions every 600 s.
 
-Switch LLM backends: set LLM_BACKEND=gemini (default) | ollama in .env.
+Switch LLM backends: set LLM_BACKEND=groq (default) | ollama in .env.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.documents import Document
+from pydantic import SecretStr
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -206,33 +207,18 @@ def _extract_question(x: str | dict) -> str:
 def get_llm() -> BaseLanguageModel:
     """Return the active LLM backend.
 
-    Gemini 2.0 Flash is used when ``LLM_BACKEND=gemini`` and DeepSeek-R1
-    via Ollama is used when ``LLM_BACKEND=ollama``.
+    Groq ``llama-3.1-8b-instant`` is used when ``LLM_BACKEND=groq`` (default).
+    DeepSeek-R1-Distill-Qwen-14B via Ollama is used when ``LLM_BACKEND=ollama``.
+    Gemini 2.0 Flash is used when ``LLM_BACKEND=gemini`` (legacy).
 
     Raises
     ------
-    RuntimeError  If required env var is missing.
-    ValueError    If LLM_BACKEND is not "gemini" or "ollama".
+    RuntimeError  If required env var (GROQ_API_KEY) is missing.
+    ValueError    If LLM_BACKEND is not "groq" or "ollama".
     """
-    backend = os.getenv("LLM_BACKEND", "gemini").lower().strip()
-
-    if backend == "gemini":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise RuntimeError("GOOGLE_API_KEY not set but LLM_BACKEND=gemini")
-
-        model_name = os.getenv("LLM_MODEL", "gemini-2.0-flash")
-        logger.info("Using %s as primary LLM (free tier, demo/dev environment)", model_name)
-        return ChatGoogleGenerativeAI(
-            model=model_name,
-            api_key=api_key,  # langchain-google-genai 4.x expects plain str
-            temperature=0.2,
-            max_retries=0,    # fail fast on quota errors — no retry storm
-        )
-
-    elif backend == "groq":
+    backend = os.getenv("LLM_BACKEND", "groq").lower().strip()
+    
+    if backend == "groq":
         from langchain_groq import ChatGroq
 
         groq_api_key = os.getenv("GROQ_API_KEY")
@@ -256,7 +242,7 @@ def get_llm() -> BaseLanguageModel:
             )
             return ChatGroq(
                 model=groq_model,
-                api_key=groq_api_key,
+                api_key=SecretStr(groq_api_key),
                 temperature=0.2,
                 max_tokens=2048,
                 max_retries=2,
@@ -266,7 +252,7 @@ def get_llm() -> BaseLanguageModel:
             # Older langchain-core without InMemoryRateLimiter or rate_limiter kwarg.
             return ChatGroq(
                 model=groq_model,
-                api_key=groq_api_key,
+                api_key=SecretStr(groq_api_key),
                 temperature=0.2,
                 max_tokens=2048,
                 max_retries=2,
@@ -291,7 +277,7 @@ def get_llm() -> BaseLanguageModel:
     else:
         raise ValueError(
             f"Unknown LLM_BACKEND '{backend}'. "
-            f"Must be 'gemini' or 'ollama'."
+            f"Must be 'groq', 'gemini', or 'ollama'."
         )
 
 
