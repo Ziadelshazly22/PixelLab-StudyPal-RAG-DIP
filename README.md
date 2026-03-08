@@ -2,9 +2,9 @@
 
 > **RAG-Powered AI Tutor for Digital Image Processing**
 
-A production-ready microservice that grounds every answer in the *Gonzalez & Woods* textbook and verified library documentation (OpenCV, scikit-image). It uses a **dual-LLM strategy** — Gemini 2.0 Flash for fast, grounded responses and DeepSeek-R1 for deep mathematical reasoning — delivered through a clean REST API and an interactive Gradio chat interface.
+A production-ready microservice that grounds every answer in the *Gonzalez & Woods* textbook and verified library documentation (OpenCV, scikit-image). It delivers grounded, cited answers powered by **Groq `llama-3.1-8b-instant`** through a clean REST API and an interactive Gradio chat interface.
 
-Built with **LangChain · LangServe · FastAPI · ChromaDB · Gradio**.
+Built with **LangChain · FastAPI · ChromaDB · Gradio**.
 
 ---
 
@@ -17,6 +17,7 @@ Built with **LangChain · LangServe · FastAPI · ChromaDB · Gradio**.
 - [Module Overview](#module-overview)
 - [API Reference](#api-reference)
 - [Running Tests](#running-tests)
+- [Evaluation Results](#evaluation-results)
 - [Tech Stack](#tech-stack)
 - [License](#license)
 
@@ -31,8 +32,8 @@ User (browser / API client)
 ┌───────────────────────────────────────────┐
 │          FastAPI  (main.py)               │
 │  ┌──────────────┐  ┌─────────────────┐   │
-│  │  REST routes │  │  LangServe /rag │   │
-│  │  /api/*      │  │  /summarize     │   │
+│  │  REST routes │  │  RAG chain      │   │
+│  │  /api/*      │  │  /rag/invoke    │   │
 │  └──────────────┘  └─────────────────┘   │
 │           │                │             │
 │           ▼                ▼             │
@@ -51,7 +52,7 @@ User (browser / API client)
    Gradio UI  (/ui)
 ```
 
-**Ingestion pipeline:** `data/raw/*.pdf` → PyMuPDF loader → `RecursiveCharacterTextSplitter` → embeddings *(Google `text-embedding-004` primary / `all-MiniLM-L6-v2` fallback)* → ChromaDB
+**Ingestion pipeline:** `data/raw/*.pdf` → PyMuPDF loader → `RecursiveCharacterTextSplitter` → `all-MiniLM-L6-v2` embeddings → ChromaDB
 
 **Query pipeline:** Question → MMR retrieval → LCEL chain (prompt + LLM) → cited answer
 
@@ -107,10 +108,14 @@ smart-learning-assistant/
 │     
 ├── notebooks/                 # Prototyping notebooks
 ├── tests/                     # Unit tests
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_ingestion.py
+│   └── test_rag_components.py
 ├── .env.example               # Environment variable template
 ├── .gitignore
-├── main.py                    # FastAPI + LangServe entry point
+├── pytest.ini                 # pytest configuration
+├── main.py                    # FastAPI entry point
 ├── requirements.txt
 └── README.md
 ```
@@ -122,8 +127,7 @@ smart-learning-assistant/
 ### Prerequisites
 
 - Python **3.10+** (project tested on 3.12)
-- A [Google AI Studio](https://aistudio.google.com/) API key (Gemini)
-- *(Optional)* A DeepSeek API key
+- A [Groq Cloud](https://console.groq.com/keys) API key — `llama-3.1-8b-instant` is the primary LLM
 
 ### 1. Clone & create environment
 
@@ -180,16 +184,15 @@ uvicorn main:app --reload
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and populate each value:
+
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `GOOGLE_API_KEY` | ✅ | Gemini API key — [Google AI Studio](https://aistudio.google.com/app/apikey) |
-| `EMBEDDING_MODEL` | ✅ | Embedding model name (default: `models/text-embedding-004`) |
-| `LLM_MODEL` | ✅ | Primary LLM model name (default: `gemini-2.0-flash`) |
+| `GROQ_API_KEY` | ✅ | Groq API key — [Groq Console](https://console.groq.com/keys) |
+| `LLM_MODEL` | ✅ | Groq model name (default: `llama-3.1-8b-instant`) |
 | `CHROMA_PERSIST_DIR` | ✅ | Path to ChromaDB storage (default: `./data/chroma_db`) |
-| `OLLAMA_BASE_URL` | ⬜ | Ollama server URL for DeepSeek-R1 fallback (default: `http://localhost:11434`) |
-| `DEEPSEEK_MODEL` | ⬜ | DeepSeek model name served by Ollama (default: `deepseek-r1`) |
+| `OLLAMA_BASE_URL` | ⬜ | Optional Ollama server URL (legacy fallback) |
+| `DEEPSEEK_MODEL` | ⬜ | Optional DeepSeek model name for Ollama (legacy fallback) |
 
 ---
 
@@ -198,7 +201,7 @@ Copy `.env.example` to `.env` and populate each value:
 | Module | File | Responsibility |
 | --- | --- | --- |
 | `app.api` | `router.py` | Auxiliary REST endpoints (`/api/health`, `/api/info`) |
-| `app.chains` | `rag_chain.py` | LCEL RAG chain — retriever → prompt → Gemini 2.0 Flash → parser |
+| `app.chains` | `rag_chain.py` | LCEL RAG chain — retriever → prompt → groq(llama-3.1-8b-instant) → parser |
 | `app.ingestion` | `pipeline.py` | PDF → chunk → embed → persist to ChromaDB |
 | `app.retrieval` | `retriever.py` | MMR retriever over the persisted ChromaDB collection |
 | `app.summarization` | `summarizer.py` | Map-reduce chapter summarisation chain |
@@ -227,7 +230,7 @@ Returns service version and active model names.
 
 ### `POST /rag/invoke` *(after ingestion)*
 
-LangServe-managed RAG chain endpoint.
+RAG chain endpoint — LCEL pipeline (retriever → prompt → Groq LLM).
 
 ```json
 { "input": "Explain the Sobel edge detection operator." }
@@ -247,15 +250,27 @@ pytest tests/ -v
 
 ---
 
+## Evaluation Results
+
+| Metric | Score | Threshold |
+| --- | --- | --- |
+| Faithfulness | 0.726 | ≥ 0.7 ✅ |
+| Answer Relevancy | 0.807 | ≥ 0.7 ✅ |
+| Context Precision | 0.918 | ≥ 0.7 ✅ |
+| Context Recall | 0.709 | ≥ 0.7 ✅ |
+| **Overall** | **0.790** | **≥ 0.7 ✅** |
+
+Evaluated with RAGAS on a 25-question test set grounded in the *Gonzalez & Woods* textbook. Full report: [`evaluation_report.md`](smart-learning-assistant/evaluation_report.md).
+
+---
+
 ## Tech Stack
 
 | Layer | Library / Tool |
 | --- | --- |
-| LLM orchestration | LangChain 0.2, LangServe 0.2 |
-| Primary LLM | Gemini 2.0 Flash (`langchain-google-genai`) |
-| Fallback LLM | DeepSeek-R1 via Ollama |
-| Primary embeddings | Google `text-embedding-004` (`langchain-google-genai`) |
-| Fallback embeddings | `all-MiniLM-L6-v2` (sentence-transformers, local) |
+| LLM orchestration | LangChain 0.3 |
+| LLM | Groq `llama-3.1-8b-instant` (`langchain-groq`) |
+| Embeddings | `all-MiniLM-L6-v2` (sentence-transformers, local) |
 | Vector store | ChromaDB (`langchain-chroma`) |
 | PDF parsing | PyMuPDF (fitz), pdfplumber |
 | LaTeX / math OCR | Nougat (`nougat-ocr`) |
