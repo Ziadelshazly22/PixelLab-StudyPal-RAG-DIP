@@ -31,7 +31,11 @@ build/
 *.log.*
 .DS_Store
 
-# Generated evaluation artifacts (ephemeral)
-data/ragas_scores.csv       # produced by Cell 5 — not source
-data/ragas_checkpoint.json  # ephemeral checkpoint — not source
-# evaluation_report.md is committed — it is the final deliverable
+# Generated evaluation artifacts (ephemeral — produced by Colab, not source)
+data/ragas_scores.csv
+data/ragas_checkpoint.json
+data/evaluation_report.md
+# The root evaluation_report.md is committed — it is the final deliverable
+
+# Logs
+logs/

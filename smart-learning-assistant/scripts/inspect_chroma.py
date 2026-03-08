@@ -1,9 +1,9 @@
-"""Inspect ChromaDB SQLite schema to diagnose _type KeyError - v2."""
+"""Inspect ChromaDB SQLite schema."""
 import sqlite3
 import json
-import os
+from pathlib import Path
 
-db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'chroma_db', 'chroma.sqlite3'))
+db_path = str(Path(__file__).resolve().parent.parent / "data" / "chroma_db" / "chroma.sqlite3")
 print(f"DB path: {db_path}")
 
 conn = sqlite3.connect(db_path)

@@ -1,7 +1,10 @@
 """Test vectorstore search after ChromaDB patches."""
 import sys, os
-os.chdir('B:/PixelLab-StudyPal-RAG-DIP/smart-learning-assistant')
-sys.path.insert(0, '.')
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent  # smart-learning-assistant/
+os.chdir(str(_PROJECT_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.ingestion.pipeline import load_vectorstore
 

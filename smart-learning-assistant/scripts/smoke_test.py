@@ -5,13 +5,14 @@ import time
 import json
 import requests
 import os
+from pathlib import Path
 
 SERVER_URL = "http://127.0.0.1:8000"
-PY = r"B:\PixelLab-StudyPal-RAG-DIP\smart-learning-assistant\.venv\Scripts\python.exe"
-APP_DIR = r"B:\PixelLab-StudyPal-RAG-DIP\smart-learning-assistant"
+APP_DIR = str(Path(__file__).resolve().parent.parent)   # smart-learning-assistant/
+PY = sys.executable                                     # same interpreter running this script
 
 env = os.environ.copy()
-env["CHROMA_PERSIST_DIR"] = r"B:\PixelLab-StudyPal-RAG-DIP\smart-learning-assistant\data\chroma_db"
+env["CHROMA_PERSIST_DIR"] = str(Path(APP_DIR) / "data" / "chroma_db")
 
 print("=" * 60)
 print("Starting uvicorn server...")
