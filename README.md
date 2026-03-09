@@ -48,7 +48,7 @@ The system uses a **dual-LLM strategy**: **Groq `llama-3.1-8b-instant`** (free-t
 
 ## 🏗️ Architecture
 
-![DIP AI Tutor — System Architecture Diagram](architecture_diagram.png/image.png)
+![DIP AI Tutor — System Architecture Diagram](assets\architecture_diagram.png.png)
 
 Ingestion: `data/raw/*.pdf` → **PyMuPDF** (primary) / **pdfplumber** (fallback) → `RecursiveCharacterTextSplitter` (chunk_size=800 chars, overlap=150) → **`all-MiniLM-L6-v2`** local embeddings → **ChromaDB** persistent store.
 
