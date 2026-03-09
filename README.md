@@ -28,8 +28,8 @@ The system uses a **dual-LLM strategy**: **Groq `llama-3.1-8b-instant`** (free-t
 
 - 📚 **Cited answers** — every factual claim includes `[Source: <file>, Page: <N>]` drawn directly from the knowledge base
 - 🧠 **Multi-turn memory** — per-session `ConversationBufferWindowMemory` (10-turn window) enables follow-up questions without re-stating context
-- � **Session document attach** — attach any PDF, DOCX, or PPTX directly to the chat without ingesting into the KB; the LLM reads your document in full context and answers from it, including structured 5-section academic summaries on demand
-- �📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately
+- 📎**Session document attach** — attach any PDF, DOCX, or PPTX directly to the chat without ingesting into the KB; the LLM reads your document in full context and answers from it, including structured 5-section academic summaries on demand
+- 📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately
 - 📑 **Chapter summarization** — map-reduce chain condenses any ingested document into a structured study guide
 - 📝 **Exam question generation** — automatically generates conceptual, mathematical, and applied exam questions from any ingested source
 - 🚫 **Off-topic guardrail** — L2-distance threshold blocks non-DIP queries; 3/3 guardrail tests passed in RAGAS evaluation
@@ -144,7 +144,7 @@ smart-learning-assistant/
 
 ## System Architecture Diagram
 
-![DIP AI Tutor RAG System Architecture diagram showing two main pipelines. The One-Time Ingestion Pipeline on the left flows through: Source Documents including Gonzalez and Woods DIP 4th Ed and OpenCV NumPy SciPy Matplotlib Pillow, then Text Extraction via PyMuPDF primary and pdfplumber fallback, then Chunking with RecursiveCharacterTextSplitter chunk size 800 overlap 150, then Embedding using SentenceTransformers all-MiniLM-L6-v2 384-dim local no API, into a ChromaDB Vector Store with 22924 chunks in collection dip knowledge base. The Runtime Query Pipeline on the right begins with Student Question via Gradio UI or POST /chat, optionally joined by an Attached Document for PDF DOCX or PPTX files stored in-memory only and never stored. An Intent Router branches into Path A using an MMR Retriever with k=12 fetch k=50 lambda=0.9 followed by an L2 Guardrail with threshold 1.2 and polite refusal for off-topic queries, and Path B using a Document Extractor and Session Document held in memory and never persisted to ChromaDB. Both paths feed a Prompt Builder then an LLM layer offering Groq llama-3.1-8b-instant for Demo and Dev and Ollama DeepSeek-R1-Distill-Qwen-14B fully local for Campus and Offline, then Session Memory using ConversationBufferWindowMemory with k=10 turns per-session TTL 3600s and max 100 sessions. The Response section at the bottom shows a Cited Answer in Markdown and LaTeX with source and page citations flowing to a Gradio UI with Chat and Upload tabs mounted at /ui and to a FastAPI REST layer exposing POST /chat POST /chain/rag/invoke POST /summarize POST /ingest and GET /status. An Offline Evaluation panel shows RAGAS scores across 15 DIP and 3 off-topic questions: Faithfulness 0.726, Answer Relevancy 0.807, Context Precision 0.918, Context Recall 0.709, Overall 0.790, and Guardrail 3/3, all passing.](B:\PixelLab-StudyPal-RAG-DIP\assets\image.png)
+![DIP AI Tutor RAG System Architecture](assets/image.png)
 
 ## 🚀 Quick Start
 
