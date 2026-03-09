@@ -26,52 +26,35 @@ The system uses a **dual-LLM strategy**: **Groq `llama-3.1-8b-instant`** (free-t
 
 ## ✨ Features
 
-- 📚 **Cited answers** — every factual claim includes `[Source: <file>, Page: <N>]` drawn directly from the knowledge base
-- 🧠 **Multi-turn memory** — per-session `ConversationBufferWindowMemory` (10-turn window) enables follow-up questions without re-stating context
-- 📎**Session document attach** — attach any PDF, DOCX, or PPTX directly to the chat without ingesting into the KB; the LLM reads your document in full context and answers from it, including structured 5-section academic summaries on demand
-- 📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately
-- 📑 **Chapter summarization** — map-reduce chain condenses any ingested document into a structured study guide
-- 📝 **Exam question generation** — automatically generates conceptual, mathematical, and applied exam questions from any ingested source
-- 🚫 **Off-topic guardrail** — L2-distance threshold blocks non-DIP queries; 3/3 guardrail tests passed in RAGAS evaluation
-- 🔄 **Dual-LLM backend** — `LLM_BACKEND=groq` (Groq `llama-3.1-8b-instant`, free tier) for development; `LLM_BACKEND=ollama` (DeepSeek-R1-Distill-Qwen-14B, fully local) for campus deployment
-- 📊 **RAGAS-evaluated quality** — 0.790 overall score across 4 metrics on a 15-question DIP test set; all metrics ≥ 0.7
+- 📚 **Cited answers** — every factual claim includes `[Source: <file>, Page: <N>]` drawn directly from the knowledge base.
+
+- 🧠 **Multi-turn memory** — per-session `ConversationBufferWindowMemory` (10-turn window) enables follow-up questions without re-stating context.
+
+- 📎 **Session document attach** — attach any PDF, DOCX, or PPTX directly to the chat without ingesting into the KB; the LLM reads your document in full context and answers from it, including structured 5-section academic summaries on demand.
+
+- 📤 **Document upload & ingestion** — upload a new PDF through the Gradio UI or `POST /ingest`; chunks appear in ChromaDB immediately.
+
+- 📑 **Chapter summarization** — map-reduce chain condenses any ingested document into a structured study guide.
+
+- 📝 **Exam question generation** — automatically generates conceptual, mathematical, and applied exam questions from any ingested source.
+
+- 🚫 **Off-topic guardrail** — L2-distance threshold blocks non-DIP queries; 3/3 guardrail tests passed in RAGAS evaluation.
+
+- 🔄 **Dual-LLM backend** — `LLM_BACKEND=groq` (Groq `llama-3.1-8b-instant`, free tier) for development; `LLM_BACKEND=ollama` (DeepSeek-R1-Distill-Qwen-14B, fully local) for campus deployment.
+
+- 📊 **RAGAS-evaluated quality** — 0.790 overall score across 4 metrics on a 15-question DIP test set; all metrics ≥ 0.7.
 
 ---
 
 ## 🏗️ Architecture
+
+![DIP AI Tutor — System Architecture Diagram](architecture_diagram.png/image.png)
 
 Ingestion: `data/raw/*.pdf` → **PyMuPDF** (primary) / **pdfplumber** (fallback) → `RecursiveCharacterTextSplitter` (chunk_size=800 chars, overlap=150) → **`all-MiniLM-L6-v2`** local embeddings → **ChromaDB** persistent store.
 
 Query: Student question → **MMR Retriever** (k=12, fetch_k=50, λ=0.9) + **L2 guardrail** (threshold=1.2; out-of-domain returns `[]`) → **RAG Prompt** (strict citation + off-topic refusal rules) → **Groq `llama-3.1-8b-instant`** (demo) or **DeepSeek-R1-Distill-Qwen-14B via Ollama** (campus) → cited Markdown answer with LaTeX equations → **Gradio UI** or **FastAPI REST**.
 
 Session-doc attach: User attaches PDF / DOCX / PPTX → PyMuPDF / python-docx / python-pptx text extraction → prepended as context `Document` (never stored in ChromaDB) → LLM called directly, bypassing `ConversationalRetrievalChain`'s condense step → answer from the attached document, not the KB.
-
-```text
-data/raw/*.pdf
-     |  PyMuPDF / pdfplumber
-     v
- Chunker (800 chars / 150 overlap)
-     |  all-MiniLM-L6-v2
-     v
- ChromaDB  <-------------- POST /ingest
-     |  MMR k=12 + L2 guardrail
-     v
- RAG Prompt --> Groq llama-3.1-8b-instant           [KB-only path]
-             or DeepSeek-R1-Distill-Qwen-14B (Ollama)
-
- Attached file (PDF/DOCX/PPTX)
-     |  PyMuPDF / python-docx / python-pptx
-     v
- Session Document (in-memory, never stored)
-     |  prepended to KB docs for the LLM call
-     v
- CONV_PROMPT / SUMMARIZE_SESSION_DOC_PROMPT         [session-doc path]
-     |
-     v
- Cited answer --> FastAPI REST  /chat  /chain/rag/invoke
-                             |
-                       Gradio UI  /ui
-```
 
 ---
 
@@ -127,6 +110,8 @@ smart-learning-assistant/
 │   ├── test_rag_components.py     # 11 unit tests — retriever + RAG chain (LCEL, prompts)
 │   ├── test_metrics.py            #  7 unit tests — evaluation metrics + report generation
 │   └── test_summarizer.py         #  6 unit tests — summarizer + study question generation
+├── assets/
+│   └── architecture_diagram.png                  # System architecture diagram (referenced in README)
 ├── .env.example                   # Copy to .env and fill in secrets
 ├── .gitignore
 ├── pytest.ini                     # pytest rootdir config (testpaths = tests)
@@ -141,10 +126,6 @@ smart-learning-assistant/
 ```
 
 ---
-
-## System Architecture Diagram
-
-![DIP AI Tutor RAG System Architecture](assets/image.png)
 
 ## 🚀 Quick Start
 
@@ -285,7 +266,17 @@ All settings are loaded from `.env` (copy from `.env.example`):
 
 ## 🤝 Contributing
 
-See `CONTRIBUTING.md` for the dual-environment workflow and the `.ipynb ↔ .py` convention: Colab notebooks (`notebooks/`) are authoritative for heavy GPU/quota tasks (ingestion, RAGAS scoring); local `.py` files are authoritative for all other development. Never commit `.env`, `data/chroma_db/`, or `data/raw/` — they are gitignored.
+Pull requests are welcome. Key conventions:
+
+- **Colab notebooks** (`notebooks/`) are authoritative for heavy GPU/quota tasks (ingestion, RAGAS scoring)
+
+- **Local `.py` files** are authoritative for all other development
+
+- **`tests/`** — pytest only, all offline, all mocked (`def test_*` functions with fixtures from `conftest.py`)
+
+- **`scripts/`** — CLI and inspection tools (no pytest collection, may require live server or ChromaDB)
+
+- Never commit `.env`, `data/chroma_db/`, or `data/raw/` — all gitignored at repo root
 
 ---
 
