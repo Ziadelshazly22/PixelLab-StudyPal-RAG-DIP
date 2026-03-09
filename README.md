@@ -116,21 +116,21 @@ smart-learning-assistant/
 │   └── evaluation_colab.ipynb     # Run on Colab for RAGAS Phase B scoring
 ├── scripts/
 │   ├── run_ingestion.py           # CLI wrapper for ingestion pipeline
-│   ├── smoke_test.py              # Quick end-to-end request check
-│   ├── test_vectorstore.py        # Verify ChromaDB collection stats
+│   ├── smoke_test.py              # Live integration check: starts server, probes all endpoints
+│   ├── test_vectorstore.py        # Interactive ChromaDB inspection (prints, not pytest)
 │   ├── inspect_chroma.py          # Browse stored chunks interactively
 │   └── calibrate_threshold.py     # Tune guardrail L2 threshold
-├── tests/
+├── tests/                         # pytest-only: all offline, all mocked, no API keys needed
 │   ├── __init__.py
-│   ├── conftest.py                # pytest fixtures (shared across all test modules)
-│   ├── test_ingestion.py          # Unit tests for ingestion pipeline
-│   ├── test_rag_components.py     # Unit tests for retriever + RAG chain
-│   ├── test_metrics.py            # Unit tests for evaluation metrics
-│   └── test_summarizer.py         # Unit tests for summarizer
+│   ├── conftest.py                # Shared fixtures (mock_vectorstore, mock_llm, fake docs)
+│   ├── test_ingestion.py          # 11 unit tests — pipeline.py (chunk, embed, metadata)
+│   ├── test_rag_components.py     # 11 unit tests — retriever + RAG chain (LCEL, prompts)
+│   ├── test_metrics.py            #  7 unit tests — evaluation metrics + report generation
+│   └── test_summarizer.py         #  6 unit tests — summarizer + study question generation
 ├── .env.example                   # Copy to .env and fill in secrets
 ├── .gitignore
-├── pytest.ini                     # pytest config (testpaths = tests)
-├── validate_setup.py              # Pre-flight environment check
+├── pytest.ini                     # pytest rootdir config (testpaths = tests)
+├── validate_setup.py              # Pre-flight environment check (imports, API key, ChromaDB)
 ├── run_all.py                     # Full health-check / go-no-go checklist
 ├── DEMO_SCRIPT.md                 # 5-minute timed demo walkthrough
 ├── evaluation_report.md           # Final RAGAS evaluation report (committed)
@@ -141,6 +141,10 @@ smart-learning-assistant/
 ```
 
 ---
+
+## System Architecture Diagram
+
+![DIP AI Tutor RAG System Architecture diagram showing two main pipelines. The One-Time Ingestion Pipeline on the left flows through: Source Documents including Gonzalez and Woods DIP 4th Ed and OpenCV NumPy SciPy Matplotlib Pillow, then Text Extraction via PyMuPDF primary and pdfplumber fallback, then Chunking with RecursiveCharacterTextSplitter chunk size 800 overlap 150, then Embedding using SentenceTransformers all-MiniLM-L6-v2 384-dim local no API, into a ChromaDB Vector Store with 22924 chunks in collection dip knowledge base. The Runtime Query Pipeline on the right begins with Student Question via Gradio UI or POST /chat, optionally joined by an Attached Document for PDF DOCX or PPTX files stored in-memory only and never stored. An Intent Router branches into Path A using an MMR Retriever with k=12 fetch k=50 lambda=0.9 followed by an L2 Guardrail with threshold 1.2 and polite refusal for off-topic queries, and Path B using a Document Extractor and Session Document held in memory and never persisted to ChromaDB. Both paths feed a Prompt Builder then an LLM layer offering Groq llama-3.1-8b-instant for Demo and Dev and Ollama DeepSeek-R1-Distill-Qwen-14B fully local for Campus and Offline, then Session Memory using ConversationBufferWindowMemory with k=10 turns per-session TTL 3600s and max 100 sessions. The Response section at the bottom shows a Cited Answer in Markdown and LaTeX with source and page citations flowing to a Gradio UI with Chat and Upload tabs mounted at /ui and to a FastAPI REST layer exposing POST /chat POST /chain/rag/invoke POST /summarize POST /ingest and GET /status. An Offline Evaluation panel shows RAGAS scores across 15 DIP and 3 off-topic questions: Faithfulness 0.726, Answer Relevancy 0.807, Context Precision 0.918, Context Recall 0.709, Overall 0.790, and Guardrail 3/3, all passing.](B:\PixelLab-StudyPal-RAG-DIP\assets\image.png)
 
 ## 🚀 Quick Start
 
