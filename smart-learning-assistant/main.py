@@ -57,6 +57,30 @@ def _is_quota_error(exc: Exception) -> bool:
     )
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    """Heuristic checker for provider/network connectivity failures."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        token in text
+        for token in (
+            "apiconnectionerror",
+            "connecterror",
+            "connection error",
+            "getaddrinfo failed",
+            "name or service not known",
+            "temporary failure in name resolution",
+        )
+    )
+
+
+def _internal_error_detail(prefix: str, exc: Exception, *, limit: int = 240) -> str:
+    """Build a short error detail string that preserves the exception type."""
+    message = f"{type(exc).__name__}: {exc}"
+    if len(message) > limit:
+        message = message[: limit - 3] + "..."
+    return f"{prefix} ({message})"
+
+
 # ---------------------------------------------------------------------------
 # Lifespan — log LLM backend on startup
 # ---------------------------------------------------------------------------
@@ -109,7 +133,7 @@ app = FastAPI(
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):  # noqa: ANN001
-    """Convert provider quota/rate-limit failures into user-friendly 503s."""
+    """Convert provider quota/rate-limit and connectivity failures into 503s."""
     if _is_quota_error(exc):
         return JSONResponse(
             status_code=503,
@@ -118,6 +142,17 @@ async def unhandled_exception_handler(request, exc):  # noqa: ANN001
                     "LLM quota/rate limit reached. Please retry later or switch backend "
                     "to Ollama for local inference."
                 )
+            },
+        )
+    if _is_connection_error(exc):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": _internal_error_detail(
+                    "LLM provider is unreachable",
+                    exc,
+                )
+                + " Try again later or switch LLM_BACKEND=ollama if you have a local Ollama server.",
             },
         )
     logger.error("Unhandled exception: %s", exc, exc_info=True)
@@ -186,13 +221,27 @@ async def chain_rag_invoke(body: _ChainRequest) -> dict:
         chain = build_rag_chain()
         result = await loop.run_in_executor(None, chain.invoke, body.input)
     except Exception as exc:  # noqa: BLE001
+        if _is_connection_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    _internal_error_detail(
+                        "LLM provider is unreachable during chain invocation",
+                        exc,
+                    )
+                    + " Check network/DNS or switch LLM_BACKEND=ollama if available."
+                ),
+            ) from exc
         if _is_quota_error(exc):
             raise HTTPException(
                 status_code=503,
                 detail="LLM quota/rate limit reached. Please retry later.",
             ) from exc
         logger.error("/chain/rag/invoke failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Chain invocation failed.") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=_internal_error_detail("Chain invocation failed", exc),
+        ) from exc
     return {"output": result}
 
 
@@ -269,6 +318,17 @@ async def chat(body: _ChatRequest) -> dict:
             ),
         )
     except Exception as exc:  # noqa: BLE001
+        if _is_connection_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    _internal_error_detail(
+                        "LLM provider is unreachable during chat",
+                        exc,
+                    )
+                    + " Check network/DNS or switch LLM_BACKEND=ollama if available."
+                ),
+            ) from exc
         if _is_quota_error(exc):
             raise HTTPException(
                 status_code=503,
@@ -280,7 +340,10 @@ async def chat(body: _ChatRequest) -> dict:
         logger.error("/chat failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail="Chat request failed due to an internal processing error.",
+            detail=_internal_error_detail(
+                "Chat request failed due to an internal processing error",
+                exc,
+            ),
         ) from exc
     return result
 
@@ -324,6 +387,17 @@ async def summarize(body: _SummarizeRequest) -> dict:
             ),
         )
     except Exception as exc:  # noqa: BLE001
+        if _is_connection_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    _internal_error_detail(
+                        "LLM provider is unreachable during summarisation",
+                        exc,
+                    )
+                    + " Check network/DNS or switch LLM_BACKEND=ollama if available."
+                ),
+            ) from exc
         if _is_quota_error(exc):
             raise HTTPException(
                 status_code=503,
